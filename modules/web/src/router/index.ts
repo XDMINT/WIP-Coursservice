@@ -6,10 +6,10 @@ import ViewLogin from '../views/ViewLogin.vue'
 import ViewProfile from '../views/ViewProfile.vue'
 import ViewCourses from '../views/ViewCourses.vue'
 import ViewCourseSignup from '../views/ViewCourseSignup.vue'
-import ViewCourse from '../views/ViewCourse.vue'
 import ViewIntroduction from '../views/ViewIntroduction.vue'
 import View404Page from '../views/View404Page.vue'
 import ViewMembers from '../views/ViewMembers.vue'
+import ViewCourseOverview from '../views/ViewCourseOverview.vue'
 
 import authService from '@/services/auth.service'
 
@@ -54,7 +54,7 @@ const router = createRouter({
     {
       path: '/course/:id',
       name: 'ViewCourse',
-      component: ViewCourse
+      component: ViewCourseOverview
     },
     {
       path: '/',

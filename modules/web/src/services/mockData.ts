@@ -66,6 +66,7 @@ const createMember = (user: User, role: string): Member => ({
   user: {
     id: user.id,
     username: user.username,
+    email: user.email,
     firstName: user.username,
     lastName: role === CourseRoles.OWNER ? 'Administrator' : role === CourseRoles.TUTOR ? 'Tutor' : 'Student',
     roles: user.roles.map((entry, index) => ({
