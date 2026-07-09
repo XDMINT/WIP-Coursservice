@@ -1,0 +1,28 @@
+app:
+  name: "courses-service"
+fullnameOverride: "courses-service"
+
+image:
+  # Registry URL ohne den Tag am Ende
+  repository: "wip-backend/courses-service"
+  # Image-Hash, den dein Pipeline-Run,nicht latest sondern, wir geben ihm das vor und argo macht dann sein zeug. Gitbots/ interne argo cd
+  tag: "latest"
+
+imagePullSecrets:
+  - name: github-ghcr
+
+service:
+  port: 3000 # Der Port, auf dem deine NestJS App im Container läuft
+
+# muss geändert werden!
+ingress:
+  enabled: true
+  path: "/courses" # API unter http://api.localhost/courses erreichbar
+
+
+env:
+  DB_HOST: "courses-db-service.plattform-core.svc.cluster.local"
+  DB_PORT: "3306"
+  DB_USER: "user"
+  DB_PASS: "root"
+  DB_NAME: "courses"

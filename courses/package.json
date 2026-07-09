@@ -1,0 +1,17 @@
+{
+  "name": "courses",
+  "version": "0.0.1",
+  "private": "true",
+  "scripts": {
+    "build": "nest build",
+    "generate-models": "npx openapi-typescript-codegen --input ../../../../api-contracts/course-api.yaml --output ./src/generated --exportCore false --exportServices false",
+
+    "start": "nest start"
+  },
+  "dependencies": {
+    "@nestjs/typeorm": "^11.0.1",
+    "mysql2": "^3.22.3",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^0.3.29"
+  }
+}

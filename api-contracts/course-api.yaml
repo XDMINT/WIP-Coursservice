@@ -1,0 +1,236 @@
+openapi: 3.0.3
+
+info:
+  title: Course API
+  version: 1.0.0
+  description: API for Course Management
+
+paths:
+  /course/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The ID of the course to retrieve.
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Returns a list of courses.
+      description: Returns a list of courses.
+      operationId: getCourses
+      tags:
+        - CourseService
+      responses:
+        '200':
+          description: A list of courses.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseDto'
+        '404':
+          description: Course not found.
+
+
+
+components:
+  schemas:
+    CourseStatus:
+      type: string
+      enum: [ 'draft', 'published', 'archived' ]
+      description: Publication status of a course.
+
+    EnrollmentRole:
+      type: string
+      enum: [ 'student', 'tutor', 'teacher' ]
+      description: Role of a user inside a course.
+
+    CourseDto:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - semester
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier of the course.
+        externalId:
+          type: string
+          nullable: true
+          description: Optional external identifier, e.g. from another system.
+        ownerId:
+          type: string
+          readOnly: true
+          description: ID of the user who owns the course.
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Title of the course.
+        description:
+          type: string
+          nullable: true
+          description: Optional course description.
+        semester:
+          type: integer
+          minimum: 1
+          description: Semester number or internal semester reference.
+        status:
+          $ref: '#/components/schemas/CourseStatus'
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+
+    CourseVersionDto:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - courseId
+        - version_number
+        - content
+        - createdAt
+        - createdBy
+        - is_active
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Date and time when the version was created.
+        createdBy:
+          type: string
+          format: uuid
+          readOnly: true
+          description: ID of the user who created the version.
+        content:
+          type: string
+          description: Content of the course version.
+        version_number:
+          type: integer
+          description: Version number of the course.
+        is_active:
+          type: boolean
+          description: Whether the version is currently active.
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier of the course version.
+        courseId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: ID of the course the version belongs to.
+
+    GroupDto:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - courseId
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier of the group.
+        courseId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: ID of the course the group belongs to.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Name of the group.
+
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    GroupMemberShipDto:
+      type: object
+      additionalProperties: false
+      required:
+        - groupId
+        - userId
+      properties:
+        groupId:
+          type: string
+          format: uuid
+          description: ReferenceID of the group.
+        userId:
+          type: string
+          format: uuid
+          description: ReferenceId of the userMember
+
+    EnrollmentDto:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - courseId
+        - userId
+        - role
+        - enrolled_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier of the enrollment.
+        courseId:
+          type: string
+          format: uuid
+          readOnly: true
+          description: ID of the course the enrollment belongs to.
+        userId:
+          type: string
+          format: uuid
+          description: ReferenceId of the userMember
+        role:
+          $ref: '#/components/schemas/EnrollmentRole'
+        enrolled_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    CourseDetailDto:
+      type: object
+      additionalProperties: false
+      required:
+        - course
+        - versions
+        - enrollments
+        - groups
+      properties:
+        course:
+          $ref: '#/components/schemas/CourseDto'
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseVersionDto'
+        enrollments:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnrollmentDto'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/GroupDto'

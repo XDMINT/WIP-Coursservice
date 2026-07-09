@@ -1,0 +1,61 @@
+openapi: 3.0.3
+info:
+  title: User API
+  version: 1.0.0
+
+paths:
+  /user/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get user by id
+      operationId: getUserById
+      tags:
+        - UserService
+      responses:
+        '200':
+          description: User Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDto'
+        '404':
+          description: User Not Found
+          content:
+            application/json:
+              schema:
+                $ref: './shared-types.yaml#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    UserDto:
+      type: object
+      required:
+        - id
+        - username
+        - email
+        - is_active
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The user's unique identifier
+        external_id:
+          type: string
+          description: The user's external identifier from CAS
+        username:
+          type: string
+          description: The user's username
+        email:
+          type: string
+          format: email
+          description: The user's email address
+        last_cas_sync:
+          type: string
+          format: date-time
+          description: The date and time of the last CAS synchronization
