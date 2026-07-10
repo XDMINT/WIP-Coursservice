@@ -4,3 +4,11 @@
 **/bin
 **/.gradle
 /data
+.git
+.idea
+.env
+.env.*
+!.env.example
+temp
+tmp
+coverage

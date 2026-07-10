@@ -1,5 +1,0 @@
-name: test
-description: Ein kleiner Test
-steps:
-  - name: gib-daten
-    command: "curl -sS -f -X GET http://traefik:8000/workflows"

@@ -1,0 +1,106 @@
+services:
+  traefik:
+    image: traefik:3.7.1
+    command:
+      - "--entrypoints.web.address=:80"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--accesslog=true"
+      - "--api.dashboard=false"
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - proxy-network
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+      args:
+        VITE_PUBLIC_API_BASE_URL: "${PUBLIC_API_BASE_URL:-/api}"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "coursservice-proxy-network"
+      traefik.http.routers.frontend.rule: "PathPrefix(`/`)"
+      traefik.http.routers.frontend.entrypoints: "web"
+      traefik.http.routers.frontend.priority: "1"
+      traefik.http.services.frontend.loadbalancer.server.port: "80"
+    networks:
+      - proxy-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    environment:
+      APP_ENV: "${APP_ENV:-development}"
+      PORT: "${BACKEND_INTERNAL_PORT:-3000}"
+      DATABASE_HOST: "course-postgres"
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: "${COURSE_DB_NAME:-ewill_courses}"
+      DATABASE_USER: "${COURSE_DB_USER:-ewill_courses}"
+      DATABASE_PASSWORD: "${COURSE_DB_PASSWORD:-change-me}"
+      DATABASE_SSL: "${DATABASE_SSL:-false}"
+      DATABASE_MIGRATIONS_RUN: "${DATABASE_MIGRATIONS_RUN:-true}"
+      COURSE_MATERIAL_STORAGE_PATH: "/app/storage/materials"
+      COURSE_MATERIAL_MAX_FILE_SIZE_BYTES: "${COURSE_MATERIAL_MAX_FILE_SIZE_BYTES:-52428800}"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "coursservice-proxy-network"
+      traefik.http.routers.backend.rule: "Path(`/api`) || PathPrefix(`/api/`)"
+      traefik.http.routers.backend.entrypoints: "web"
+      traefik.http.routers.backend.priority: "100"
+      traefik.http.services.backend.loadbalancer.server.port: "${BACKEND_INTERNAL_PORT:-3000}"
+    depends_on:
+      course-postgres:
+        condition: service_healthy
+    volumes:
+      - course-materials-data:/app/storage/materials
+    networks:
+      - proxy-network
+      - course-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${BACKEND_INTERNAL_PORT:-3000}/api/health >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  course-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: "${COURSE_DB_NAME:-ewill_courses}"
+      POSTGRES_USER: "${COURSE_DB_USER:-ewill_courses}"
+      POSTGRES_PASSWORD: "${COURSE_DB_PASSWORD:-change-me}"
+    volumes:
+      - course-postgres-data:/var/lib/postgresql/data
+    networks:
+      - course-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  course-postgres-data:
+  course-materials-data:
+
+networks:
+  proxy-network:
+    name: coursservice-proxy-network
+  course-internal:
+    name: coursservice-course-internal
+    internal: true
