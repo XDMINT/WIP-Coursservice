@@ -8,10 +8,13 @@
  */
 import {
   Column,
+  CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  UpdateDateColumn,
 } from 'typeorm';
 import { Task } from './task.entity';
 import { Enrollment } from './enrollment.entity';
@@ -35,6 +38,10 @@ export enum TaskUnlockSource {
  * 
  * Represents the progress and completion status of a student on a specific task
  */
+@Index('uq_task_progress_task_enrollment', ['taskId', 'enrollmentId'], {
+  unique: true,
+  where: '"taskId" IS NOT NULL AND "enrollmentId" IS NOT NULL',
+})
 @Entity()
 export class TaskProgress {
   /**
@@ -112,14 +119,14 @@ export class TaskProgress {
    * Timestamp when the progress record was created
    * @format date-time
    */
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   /**
    * Timestamp when the progress record was last updated
    * @format date-time
    */
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   /**

@@ -46,6 +46,15 @@ Neue Komponenten sollen diese Theme-Werte oder Vuetify-Utility-Klassen wie
 `bg-background`, `bg-surface`, `bg-surface-variant`, `text-on-surface` und
 `text-on-surface-variant` nutzen.
 
+Die globalen Grundflaechen bleiben bewusst neutral:
+
+- Light Mode: `background` und `surface` sind weiss, Varianten sind neutrale
+  helle Grautoene.
+- Dark Mode: `background`, `surface`, `surface-variant` und `surface-muted`
+  sind neutrale Schwarz- beziehungsweise Grautoene ohne Gruenanteil.
+- Die gruene Markenfarbe bleibt Akzentfarbe fuer Buttons, aktive Navigation,
+  Tabs, Icons, Fortschrittsanzeigen, Links, Chips und Fokuszustaende.
+
 ## Regeln fuer Komponenten
 
 - Keine komponentenspezifischen Hex-Farben fuer Text, Flaechen, Rahmen oder
@@ -54,6 +63,8 @@ Neue Komponenten sollen diese Theme-Werte oder Vuetify-Utility-Klassen wie
   schwache Grautoene.
 - Karten, Dialoge, Tabellen und Formulare sollen Vuetify-Oberflaechen,
   Varianten und Theme-Farben verwenden.
+- `primary` darf nicht fuer allgemeine Seitenhintergruende, grosse
+  Content-Flaechen, Dialogflaechen oder globale Overlays verwendet werden.
 - Statusinformationen duerfen nicht nur durch Farbe unterscheidbar sein.
   Verwende Text, Icons und bei Bedarf Rahmen oder Hilfetexte.
 - Neue Features muessen im Light und Dark Mode ohne eigene Dark-Mode-Abfragen

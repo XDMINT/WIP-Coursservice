@@ -74,6 +74,25 @@ Teaching roles manage task configuration and manual unlocks. The demo completion
 actions call the same service-level use case intended for a later grading
 system: `recordTaskResult(studentId, taskId, passed)`.
 
+## Course Results
+
+Kursergebnisse liegen unter `/api/courses/:courseId/results`.
+
+Relevant paths:
+
+- `GET /api/courses/:courseId/results/me`
+- `GET /api/courses/:courseId/results?page=1&pageSize=10&passStatus=PASSED&source=MANUAL_OVERRIDE`
+- `PUT /api/courses/:courseId/results/:studentId/manual`
+- `POST /api/courses/:courseId/results/:studentId/recalculate`
+- `POST /api/courses/:courseId/results/recalculate`
+
+Studierende erhalten ausschliesslich ihr eigenes Ergebnis. Teaching roles sehen
+eine paginierte Teilnehmeruebersicht, koennen manuelle Bewertungen speichern und
+automatische Neuberechnungen aus finalen Assignment-Punkten ausloesen.
+
+Die Bestehensregel ist zentral im Backend abgelegt: mehr als 50 Prozent ist
+bestanden; exakt 50 Prozent oder weniger ist nicht bestanden.
+
 ## Error Format
 
 Course Service errors use a consistent JSON shape:

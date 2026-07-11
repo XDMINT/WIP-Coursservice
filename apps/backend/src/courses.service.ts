@@ -18,6 +18,12 @@ import {
 } from './entities/learning-material.entity';
 import { Assignment } from './entities/assignment.entity';
 import { Grade } from './entities/grade.entity';
+import {
+  CoursePassStatus,
+  CourseResult,
+  CourseResultMode,
+  CourseResultSource,
+} from './entities/course-result.entity';
 import { Enrollment, CourseMemberRole } from './entities/enrollment.entity';
 import { Task, TaskUnlockMode } from './entities/task.entity';
 import {
@@ -46,6 +52,14 @@ import {
   mapEnrollmentToDto,
 } from './dto/course.dto';
 import {
+  CourseResultListQueryDto,
+  CourseResultListResponseDto,
+  CourseResultResponseDto,
+  ManualCourseResultDto,
+  mapCourseResultToDto,
+  mapMissingCourseResultToDto,
+} from './dto/course-result.dto';
+import {
   CoursePermission,
   hasCoursePermission,
   normalizeCourseRole,
@@ -72,6 +86,11 @@ import {
   mapLearningTaskWithProgressToDto,
   mapTaskProgressToDto,
 } from './dto/learning-process.dto';
+import {
+  COURSE_PASSING_RULE_DESCRIPTION,
+  COURSE_PASSING_THRESHOLD_PERCENT,
+  calculateCoursePassStatus,
+} from './course-result.rules';
 import { LocalMaterialStorage } from './storage/material-storage';
 
 export type UploadedLearningMaterialFile = {
@@ -144,6 +163,8 @@ export class CoursesService {
     private assignmentRepository: Repository<Assignment>,
     @InjectRepository(Grade)
     private gradeRepository: Repository<Grade>,
+    @InjectRepository(CourseResult)
+    private courseResultRepository: Repository<CourseResult>,
     @InjectRepository(Enrollment)
     private enrollmentRepository: Repository<Enrollment>,
     @InjectRepository(Task)
@@ -495,6 +516,287 @@ export class CoursesService {
         userId: this.toUserId(userId),
       },
     });
+  }
+
+  private parseCourseResultNumber(
+    value: unknown,
+    fieldName: string,
+  ): number | null {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+      throw new ApiValidationError(`${fieldName} must be a valid number`);
+    }
+
+    if (numericValue < 0) {
+      throw new ApiValidationError(`${fieldName} cannot be negative`);
+    }
+
+    return Math.round(numericValue * 100) / 100;
+  }
+
+  private normalizeOptionalText(value: unknown): string | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    const text = String(value).trim();
+
+    return text.length > 0 ? text : null;
+  }
+
+  private normalizeManualPassStatus(value: unknown): CoursePassStatus {
+    const normalizedStatus = String(value ?? '').toUpperCase() as CoursePassStatus;
+
+    if (
+      normalizedStatus !== CoursePassStatus.PASSED &&
+      normalizedStatus !== CoursePassStatus.FAILED
+    ) {
+      throw new ApiValidationError(
+        'Manual results require PASSED or FAILED as pass status',
+      );
+    }
+
+    return normalizedStatus;
+  }
+
+  private normalizeOptionalPassStatus(
+    value: unknown,
+  ): CoursePassStatus | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalizedStatus = String(value).toUpperCase() as CoursePassStatus;
+
+    if (!Object.values(CoursePassStatus).includes(normalizedStatus)) {
+      throw new ApiValidationError('Invalid pass status filter');
+    }
+
+    return normalizedStatus;
+  }
+
+  private normalizeOptionalCourseResultSource(
+    value: unknown,
+  ): CourseResultSource | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalizedSource = String(value).toUpperCase() as CourseResultSource;
+
+    if (!Object.values(CourseResultSource).includes(normalizedSource)) {
+      throw new ApiValidationError('Invalid result source filter');
+    }
+
+    return normalizedSource;
+  }
+
+  private parsePaginationValue(
+    value: unknown,
+    defaultValue: number,
+    maxValue?: number,
+  ): number {
+    const numericValue =
+      value === undefined || value === null || value === ''
+        ? defaultValue
+        : Number(value);
+
+    if (!Number.isInteger(numericValue) || numericValue < 1) {
+      throw new ApiValidationError('Pagination values must be positive integers');
+    }
+
+    return maxValue ? Math.min(numericValue, maxValue) : numericValue;
+  }
+
+  private validateCourseResultPoints(
+    pointsAchieved: number | null,
+    maxPoints: number | null,
+  ): void {
+    if (
+      (pointsAchieved === null && maxPoints !== null) ||
+      (pointsAchieved !== null && maxPoints === null)
+    ) {
+      throw new ApiValidationError(
+        'Points achieved and max points must be provided together',
+      );
+    }
+
+    if (
+      pointsAchieved !== null &&
+      maxPoints !== null &&
+      pointsAchieved > maxPoints
+    ) {
+      throw new ApiValidationError(
+        'Points achieved cannot be greater than max points',
+      );
+    }
+  }
+
+  private calculatePercentage(
+    pointsAchieved: number | null,
+    maxPoints: number | null,
+  ): number | null {
+    if (
+      pointsAchieved === null ||
+      maxPoints === null ||
+      maxPoints === 0
+    ) {
+      return null;
+    }
+
+    return Math.round((pointsAchieved / maxPoints) * 10000) / 100;
+  }
+
+  private async findCourseResult(
+    courseId: string,
+    enrollmentId: string,
+  ): Promise<CourseResult | null> {
+    return this.courseResultRepository.findOne({
+      where: {
+        courseId,
+        enrollmentId,
+      },
+    });
+  }
+
+  private assignCourseResultRelations(
+    result: CourseResult,
+    courseId: string,
+    enrollment: Enrollment,
+  ): void {
+    result.courseId = courseId;
+    result.enrollmentId = enrollment.id;
+    result.studentId = enrollment.userId;
+
+    const course = new Course();
+    course.id = courseId;
+    result.course = course;
+    result.enrollment = enrollment;
+  }
+
+  private ensureValidAssignmentMaxPoints(assignment: Assignment): number {
+    const maxPoints = Number(assignment.maxPoints);
+
+    if (!Number.isFinite(maxPoints) || maxPoints < 0) {
+      throw new ApiValidationError('Assignment max points must be non-negative');
+    }
+
+    return maxPoints;
+  }
+
+  private ensureValidAutomaticGradePoints(
+    pointsAchieved: unknown,
+    maxPoints: number,
+  ): number {
+    const numericPoints = Number(pointsAchieved);
+
+    if (!Number.isFinite(numericPoints)) {
+      throw new ApiValidationError('Grade points must be a valid number');
+    }
+
+    if (numericPoints < 0) {
+      throw new ApiValidationError('Grade points cannot be negative');
+    }
+
+    if (numericPoints > maxPoints) {
+      throw new ApiValidationError(
+        'Grade points cannot be greater than assignment max points',
+      );
+    }
+
+    return numericPoints;
+  }
+
+  private async assertCourseResultManager(
+    courseId: string | number,
+    actorUserId?: string | number,
+  ): Promise<string> {
+    const actorId = this.requireActorUserId(actorUserId);
+
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ReadAllResults,
+    );
+
+    return actorId;
+  }
+
+  private async calculateAndSaveAutomaticCourseResult(
+    courseId: string,
+    enrollment: Enrollment,
+    actorId: string,
+  ): Promise<CourseResultResponseDto> {
+    const assignments = await this.assignmentRepository.find({
+      where: { course: { id: courseId }, isGraded: true },
+    });
+    const grades = await this.gradeRepository.find({
+      where: { enrollment: { id: enrollment.id } },
+      relations: ['assignment'],
+    });
+    const finalGrades = grades.filter((grade) => grade.isFinal);
+
+    let totalPointsAchieved = 0;
+    let totalMaxPoints = 0;
+    const assignmentAudit = assignments.map((assignment) => {
+      const maxPoints = this.ensureValidAssignmentMaxPoints(assignment);
+      const grade = finalGrades.find(
+        (candidate) => candidate.assignment?.id === assignment.id,
+      );
+      const pointsAchieved = grade
+        ? this.ensureValidAutomaticGradePoints(grade.pointsAchieved, maxPoints)
+        : 0;
+
+      totalPointsAchieved += pointsAchieved;
+      totalMaxPoints += maxPoints;
+
+      return {
+        assignmentId: assignment.id,
+        title: assignment.title,
+        maxPoints,
+        pointsAchieved,
+        gradeId: grade?.id,
+        finalGradeAvailable: Boolean(grade),
+      };
+    });
+    const roundedPointsAchieved = Math.round(totalPointsAchieved * 100) / 100;
+    const roundedMaxPoints = Math.round(totalMaxPoints * 100) / 100;
+    const percentage = this.calculatePercentage(
+      roundedPointsAchieved,
+      roundedMaxPoints,
+    );
+    const existingResult = await this.findCourseResult(courseId, enrollment.id);
+    const result = existingResult ?? new CourseResult();
+
+    this.assignCourseResultRelations(result, courseId, enrollment);
+    result.assessmentMode = CourseResultMode.AUTOMATIC;
+    result.pointsAchieved = roundedPointsAchieved;
+    result.maxPoints = roundedMaxPoints;
+    result.percentage = percentage;
+    result.manualGrade = null;
+    result.passStatus = calculateCoursePassStatus(percentage);
+    result.source = CourseResultSource.AUTOMATIC_CALCULATION;
+    result.comment = null;
+    result.gradedBy = actorId;
+    result.gradedAt = new Date();
+    result.sourceDetails = {
+      rule: COURSE_PASSING_RULE_DESCRIPTION,
+      passThresholdPercent: COURSE_PASSING_THRESHOLD_PERCENT,
+      comparator: '>',
+      calculatedFrom: 'course.assignments.finalGrades',
+      assignments: assignmentAudit,
+    };
+    result.createdBy = result.createdBy ?? actorId;
+    result.updatedBy = actorId;
+
+    return mapCourseResultToDto(
+      await this.courseResultRepository.save(result),
+    );
   }
 
   async findAll(userId?: string | number): Promise<CourseResponseDto[]> {
@@ -1149,6 +1451,198 @@ export class CoursesService {
     };
   }
 
+  async getMyCourseResult(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseResultResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ReadOwnResults,
+    );
+
+    const enrollment = await this.findStudentEnrollmentOrThrow(
+      this.toCourseId(courseId),
+      actorId,
+    );
+    const result = await this.findCourseResult(
+      this.toCourseId(courseId),
+      enrollment.id,
+    );
+
+    return result
+      ? mapCourseResultToDto(result)
+      : mapMissingCourseResultToDto(this.toCourseId(courseId), enrollment);
+  }
+
+  async getCourseResults(
+    courseId: string,
+    query: CourseResultListQueryDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseResultListResponseDto> {
+    await this.assertCourseResultManager(courseId, actorUserId);
+    await this.findCourseOrThrow(courseId);
+
+    const page = this.parsePaginationValue(query.page, 1);
+    const pageSize = this.parsePaginationValue(query.pageSize, 10, 100);
+    const passStatus = this.normalizeOptionalPassStatus(query.passStatus);
+    const source = this.normalizeOptionalCourseResultSource(query.source);
+    const enrollments = await this.enrollmentRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+        role: CourseMemberRole.STUDENT,
+      },
+      order: {
+        userId: 'ASC',
+      },
+    });
+    const results = await this.courseResultRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+      },
+    });
+    const resultByEnrollmentId = new Map(
+      results.map((result) => [result.enrollmentId, result]),
+    );
+    const allItems = enrollments
+      .map((enrollment) => {
+        const result = resultByEnrollmentId.get(enrollment.id);
+
+        return result
+          ? mapCourseResultToDto(result)
+          : mapMissingCourseResultToDto(this.toCourseId(courseId), enrollment);
+      })
+      .filter((item) => !passStatus || item.passStatus === passStatus)
+      .filter((item) => !source || item.source === source)
+      .sort((left, right) =>
+        String(left.studentId).localeCompare(String(right.studentId), undefined, {
+          numeric: true,
+        }),
+      );
+    const offset = (page - 1) * pageSize;
+
+    return {
+      items: allItems.slice(offset, offset + pageSize),
+      page,
+      pageSize,
+      total: allItems.length,
+    };
+  }
+
+  async setManualCourseResult(
+    courseId: string,
+    studentId: string,
+    body: ManualCourseResultDto,
+    actorUserId?: string | number,
+  ): Promise<CourseResultResponseDto> {
+    const actorId = await this.assertCourseResultManager(courseId, actorUserId);
+    const enrollment = await this.findStudentEnrollmentOrThrow(
+      this.toCourseId(courseId),
+      studentId,
+    );
+    const pointsAchieved = this.parseCourseResultNumber(
+      body?.pointsAchieved,
+      'Points achieved',
+    );
+    const maxPoints = this.parseCourseResultNumber(body?.maxPoints, 'Max points');
+    const manualGrade = this.normalizeOptionalText(body?.manualGrade);
+    const comment = this.normalizeOptionalText(body?.comment);
+    const passStatus = this.normalizeManualPassStatus(body?.passStatus);
+
+    this.validateCourseResultPoints(pointsAchieved, maxPoints);
+
+    const existingResult = await this.findCourseResult(
+      this.toCourseId(courseId),
+      enrollment.id,
+    );
+    const result = existingResult ?? new CourseResult();
+    const previousSource = existingResult?.source;
+    const previousAssessmentMode = existingResult?.assessmentMode;
+    const source =
+      previousSource === CourseResultSource.AUTOMATIC_CALCULATION ||
+      previousSource === CourseResultSource.MANUAL_OVERRIDE
+        ? CourseResultSource.MANUAL_OVERRIDE
+        : CourseResultSource.MANUAL_ENTRY;
+
+    this.assignCourseResultRelations(result, this.toCourseId(courseId), enrollment);
+    result.assessmentMode = CourseResultMode.MANUAL;
+    result.pointsAchieved = pointsAchieved;
+    result.maxPoints = maxPoints;
+    result.percentage = this.calculatePercentage(pointsAchieved, maxPoints);
+    result.manualGrade = manualGrade;
+    result.passStatus = passStatus;
+    result.source = source;
+    result.comment = comment;
+    result.gradedBy = actorId;
+    result.gradedAt = new Date();
+    result.sourceDetails = {
+      source,
+      previousSource,
+      previousAssessmentMode,
+      enteredBy: actorId,
+      enteredAt: result.gradedAt.toISOString(),
+    };
+    result.createdBy = result.createdBy ?? actorId;
+    result.updatedBy = actorId;
+
+    return mapCourseResultToDto(
+      await this.courseResultRepository.save(result),
+    );
+  }
+
+  async recalculateCourseResult(
+    courseId: string,
+    studentId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseResultResponseDto> {
+    const actorId = await this.assertCourseResultManager(courseId, actorUserId);
+    const enrollment = await this.findStudentEnrollmentOrThrow(
+      this.toCourseId(courseId),
+      studentId,
+    );
+
+    return this.calculateAndSaveAutomaticCourseResult(
+      this.toCourseId(courseId),
+      enrollment,
+      actorId,
+    );
+  }
+
+  async recalculateAllCourseResults(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseResultListResponseDto> {
+    const actorId = await this.assertCourseResultManager(courseId, actorUserId);
+    const enrollments = await this.enrollmentRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+        role: CourseMemberRole.STUDENT,
+      },
+      order: {
+        userId: 'ASC',
+      },
+    });
+
+    for (const enrollment of enrollments) {
+      await this.calculateAndSaveAutomaticCourseResult(
+        this.toCourseId(courseId),
+        enrollment,
+        actorId,
+      );
+    }
+
+    return this.getCourseResults(
+      this.toCourseId(courseId),
+      {
+        page: 1,
+        pageSize: Math.max(enrollments.length, 1),
+      },
+      actorId,
+    );
+  }
+
   // Assignment methods
   async createAssignment(
     courseId: string,
@@ -1270,6 +1764,19 @@ export class CoursesService {
     gradedBy: string,
     isFinal: boolean,
   ): Promise<Grade> {
+    const assignment = await this.assignmentRepository.findOne({
+      where: { id: assignmentId },
+    });
+
+    if (!assignment) {
+      throw new ApiNotFoundError('Assignment not found');
+    }
+
+    this.ensureValidAutomaticGradePoints(
+      pointsAchieved,
+      this.ensureValidAssignmentMaxPoints(assignment),
+    );
+
     const grade = new Grade();
     grade.pointsAchieved = pointsAchieved;
     grade.feedback = feedback;
@@ -1278,9 +1785,6 @@ export class CoursesService {
     grade.isFinal = isFinal;
     grade.updatedBy = gradedBy;
 
-    // Set the assignment relation
-    const assignment = new Assignment();
-    assignment.id = assignmentId;
     grade.assignment = assignment;
 
     // Set the enrollment relation
@@ -1322,11 +1826,27 @@ export class CoursesService {
   ): Promise<Grade> {
     const grade = await this.gradeRepository.findOne({
       where: { id },
+      relations: ['assignment'],
     });
 
     if (!grade) {
-      throw new Error('Grade not found');
+      throw new ApiNotFoundError('Grade not found');
     }
+
+    const assignment = grade.assignment
+      ? grade.assignment
+      : await this.assignmentRepository.findOne({
+          where: { id: (grade as any).assignmentId },
+        });
+
+    if (!assignment) {
+      throw new ApiNotFoundError('Assignment not found');
+    }
+
+    this.ensureValidAutomaticGradePoints(
+      pointsAchieved,
+      this.ensureValidAssignmentMaxPoints(assignment),
+    );
 
     grade.pointsAchieved = pointsAchieved;
     grade.feedback = feedback;
@@ -1365,7 +1885,17 @@ export class CoursesService {
       const grade = grades.find(g => g.assignment.id === assignment.id);
       
       if (grade && grade.isFinal) {
-        const percentage = grade.pointsAchieved / assignment.maxPoints;
+        const maxPoints = this.ensureValidAssignmentMaxPoints(assignment);
+
+        if (maxPoints === 0) {
+          continue;
+        }
+
+        const pointsAchieved = this.ensureValidAutomaticGradePoints(
+          grade.pointsAchieved,
+          maxPoints,
+        );
+        const percentage = pointsAchieved / maxPoints;
         totalWeightedScore += percentage * assignment.weight;
         totalWeight += assignment.weight;
       }
@@ -1376,7 +1906,8 @@ export class CoursesService {
     }
 
     const finalGrade = totalWeightedScore / totalWeight;
-    const passed = finalGrade >= 0.5; // 50% or more is passing
+    const passed =
+      calculateCoursePassStatus(finalGrade * 100) === CoursePassStatus.PASSED;
 
     return { grade: finalGrade, passed };
   }
@@ -2274,7 +2805,8 @@ export class CoursesService {
 
     if (
       progress.status === TaskProgressStatus.LOCKED ||
-      progress.status === TaskProgressStatus.AVAILABLE
+      (progress.status === TaskProgressStatus.AVAILABLE &&
+        progress.unlockSource !== TaskUnlockSource.MANUAL)
     ) {
       progress.status = TaskProgressStatus.AVAILABLE;
       progress.completionPercentage = 0;

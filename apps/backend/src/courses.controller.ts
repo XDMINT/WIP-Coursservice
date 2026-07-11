@@ -44,6 +44,12 @@ import {
   UpdateLearningTaskReleaseConfigDto,
   UpdateLearningTaskSortDto,
 } from './dto/learning-process.dto';
+import {
+  CourseResultListQueryDto,
+  CourseResultListResponseDto,
+  CourseResultResponseDto,
+  ManualCourseResultDto,
+} from './dto/course-result.dto';
 
 const maxMaterialUploadBytes = () =>
   Number(process.env.COURSE_MATERIAL_MAX_FILE_SIZE_BYTES ?? 50 * 1024 * 1024);
@@ -376,6 +382,69 @@ export class CoursesController {
   ): Promise<void> {
     return this.coursesService.deleteLearningMaterial(
       id,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Get(':courseId/results/me')
+  async getMyCourseResult(
+    @Param('courseId') courseId: string,
+    @Req() request: Request,
+  ): Promise<CourseResultResponseDto> {
+    return this.coursesService.getMyCourseResult(
+      courseId,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Get(':courseId/results')
+  async getCourseResults(
+    @Param('courseId') courseId: string,
+    @Query() query: CourseResultListQueryDto,
+    @Req() request: Request,
+  ): Promise<CourseResultListResponseDto> {
+    return this.coursesService.getCourseResults(
+      courseId,
+      query,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Put(':courseId/results/:studentId/manual')
+  async setManualCourseResult(
+    @Param('courseId') courseId: string,
+    @Param('studentId') studentId: string,
+    @Body() body: ManualCourseResultDto,
+    @Req() request: Request,
+  ): Promise<CourseResultResponseDto> {
+    return this.coursesService.setManualCourseResult(
+      courseId,
+      studentId,
+      body,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Post(':courseId/results/:studentId/recalculate')
+  async recalculateCourseResult(
+    @Param('courseId') courseId: string,
+    @Param('studentId') studentId: string,
+    @Req() request: Request,
+  ): Promise<CourseResultResponseDto> {
+    return this.coursesService.recalculateCourseResult(
+      courseId,
+      studentId,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Post(':courseId/results/recalculate')
+  async recalculateAllCourseResults(
+    @Param('courseId') courseId: string,
+    @Req() request: Request,
+  ): Promise<CourseResultListResponseDto> {
+    return this.coursesService.recalculateAllCourseResults(
+      courseId,
       getRequestActor(request).userId,
     );
   }

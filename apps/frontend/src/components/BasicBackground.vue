@@ -13,6 +13,5 @@
   align-items: center;
 
   background: rgb(var(--v-theme-background));
-  background: linear-gradient(150deg, rgb(var(--v-theme-primary)) 0%, rgb(var(--v-theme-background)) 78%);
 }
 </style>

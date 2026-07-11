@@ -407,11 +407,22 @@ const requestTaskResult = (task: StudentLearningTask, result: 'complete' | 'fail
 
 const canManuallyUnlock = (taskId: string, status: TaskProgressStatus) => status === TaskProgressStatus.LOCKED && tasks.value.find((task) => task.id === taskId)?.unlockMode === TaskUnlockMode.MANUAL
 
+const upsertProgressOverview = (updatedOverview: StudentProgressOverview) => {
+  const existingIndex = progressOverview.value.findIndex((student) => student.studentId === updatedOverview.studentId)
+
+  if (existingIndex >= 0) {
+    progressOverview.value.splice(existingIndex, 1, updatedOverview)
+    return
+  }
+
+  progressOverview.value.push(updatedOverview)
+}
+
 const manualUnlock = async (taskId: string, studentId: string) => {
   try {
-    await learningTaskService.manuallyUnlockTask(taskId, studentId)
+    const updatedOverview = await learningTaskService.manuallyUnlockTask(taskId, studentId)
+    upsertProgressOverview(updatedOverview)
     successMessage.value = 'Aufgabe freigeschaltet.'
-    await loadTeacherData()
   } catch (error) {
     errorMessage.value = getApiErrorMessage(error)
   }

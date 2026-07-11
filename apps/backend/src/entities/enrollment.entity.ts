@@ -20,6 +20,7 @@ import {
 import { Course } from './course.entity';
 import { Grade } from './grade.entity';
 import { TaskProgress } from './task-progress.entity';
+import { CourseResult } from './course-result.entity';
 
 /**
  * Course Member Role Enum
@@ -108,4 +109,7 @@ export class Enrollment {
      */
     @OneToMany(() => TaskProgress, (progress) => progress.enrollment)
     taskProgress: TaskProgress[];
+
+    @OneToMany(() => CourseResult, (result) => result.enrollment)
+    courseResults: CourseResult[];
 }

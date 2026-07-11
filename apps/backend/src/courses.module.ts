@@ -15,6 +15,7 @@ import { Assignment } from './entities/assignment.entity';
 import { Grade } from './entities/grade.entity';
 import { Task } from './entities/task.entity';
 import { TaskProgress } from './entities/task-progress.entity';
+import { CourseResult } from './entities/course-result.entity';
 import { ContentRelease } from './entities/content-release.entity';
 import { ContentTemplate } from './entities/content-template.entity';
 import { CalendarEvent } from './entities/calendar-event.entity';
@@ -31,6 +32,7 @@ import { LocalMaterialStorage } from './storage/material-storage';
       LearningMaterial,
       Assignment,
       Grade,
+      CourseResult,
       Task,
       TaskProgress,
       ContentRelease,

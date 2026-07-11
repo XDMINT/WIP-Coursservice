@@ -47,6 +47,10 @@
           <v-icon start> mdi-folder-multiple-outline </v-icon>
           Materialien
         </v-tab>
+        <v-tab v-if="canReadResults" value="bewertungen">
+          <v-icon start> mdi-school-outline </v-icon>
+          Bewertung
+        </v-tab>
         <v-tab v-if="canManageMembers" value="mitglieder">
           <v-icon start> mdi-account-group </v-icon>
           Mitglieder
@@ -78,6 +82,12 @@
         <v-tabs-window-item value="materialien">
           <v-card-text class="tab-content">
             <LearningMaterialsPanel :course-id="courseId" :can-manage="canManageContent" />
+          </v-card-text>
+        </v-tabs-window-item>
+
+        <v-tabs-window-item v-if="canReadResults" value="bewertungen">
+          <v-card-text class="tab-content">
+            <CourseResultsPanel :course-id="courseId" :can-manage="canManageResults" />
           </v-card-text>
         </v-tabs-window-item>
 
@@ -162,6 +172,7 @@ import { getApiErrorMessage, normalizeApiError } from '@/services/apiErrors'
 import CourseRoles from '@/enums/CourseRoles'
 import LearningMaterialsPanel from '@/components/course/LearningMaterialsPanel.vue'
 import LearningProcessPanel from '@/components/course/LearningProcessPanel.vue'
+import CourseResultsPanel from '@/components/course/CourseResultsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -187,6 +198,8 @@ const courseName = computed(() => course.value?.name ?? '...')
 const canManageContent = computed(() => permissions.value['course.content.manage'] === true)
 const canManageCourse = computed(() => permissions.value['course.manage'] === true)
 const canManageMembers = computed(() => permissions.value['course.members.manage'] === true)
+const canReadResults = computed(() => permissions.value['course.results.own.read'] === true || permissions.value['course.results.all.read'] === true)
+const canManageResults = computed(() => permissions.value['course.results.all.read'] === true)
 
 const breadcrumbItems = computed(() => [
   { title: 'Dashboard', disabled: false, href: '/#/home' },

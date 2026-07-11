@@ -130,6 +130,12 @@ docker compose ps
 
 Das Backend verwendet TypeORM-Migrationen und `synchronize: false`. Beim Compose-Start wird die Migration standardmaessig durch `DATABASE_MIGRATIONS_RUN=true` ausgefuehrt. Die aktuelle Initialmigration liegt unter `apps/backend/src/migrations/`.
 
+PostgreSQL nutzt in Compose das benannte Volume `course-postgres-data`.
+Ein normales `docker compose restart` oder `docker compose down` mit
+anschliessendem `docker compose up -d` behaelt Kurs-, Aufgaben- und
+Fortschrittsdaten. Nur `docker compose down -v` entfernt das Volume und ist als
+vollstaendiger lokaler Datenreset zu verstehen.
+
 ## Course-Service-Grundlage
 
 Der Course Service stellt fuer fachliche Kurs-Features einen zentralen Kurskontext bereit:
@@ -167,8 +173,21 @@ In `development`, `test` und `demo` wird ein deterministischer Demo-Kurs mit den
 drei Aufgaben `Grundlagen kennenlernen`, `Grundlagen anwenden` und
 `Abschlussaufgabe bearbeiten` idempotent angelegt. Der Seed kann mit
 `COURSE_DEMO_SEED_DISABLED=true` deaktiviert werden.
+Der Seed stellt nur fehlende Demo-Stammdaten sicher und ueberschreibt keine
+bestehenden Aufgaben- oder Fortschrittsdaten.
 
 Details stehen in [docs/learning-process.md](/Users/timguenther/Desktop/dev/WIP-Coursservice/docs/learning-process.md).
+
+## Bewertungen und Noten
+
+Der Course Service speichert Kursergebnisse pro Kurs und studentischer
+Einschreibung. Ergebnisse koennen manuell eingetragen, automatisch aus finalen
+Assignment-Punkten berechnet oder bewusst manuell ueberschrieben werden.
+
+Die zentrale Bestehensregel lautet: mehr als 50 Prozent ist bestanden, exakt
+50 Prozent oder weniger ist nicht bestanden.
+
+Details stehen in [docs/course-results.md](/Users/timguenther/Desktop/dev/WIP-Coursservice/docs/course-results.md).
 
 ## Frontend Theme
 

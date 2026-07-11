@@ -88,6 +88,7 @@ const createService = (
     emptyRepository() as any,
     emptyRepository() as any,
     emptyRepository() as any,
+    emptyRepository() as any,
     enrollmentRepository as any,
     emptyRepository() as any,
     emptyRepository() as any,

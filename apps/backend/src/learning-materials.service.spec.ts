@@ -119,6 +119,7 @@ const createService = (options: {
     materialRepository as any,
     emptyRepository() as any,
     emptyRepository() as any,
+    emptyRepository() as any,
     enrollmentRepository as any,
     emptyRepository() as any,
     emptyRepository() as any,

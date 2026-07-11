@@ -7,6 +7,7 @@ import { Task, TaskUnlockMode } from './entities/task.entity';
 import {
   TaskProgress,
   TaskProgressStatus,
+  TaskUnlockSource,
 } from './entities/task-progress.entity';
 
 const createCourse = (overrides: Partial<Course> = {}): Course =>
@@ -203,6 +204,7 @@ const createLearningProcessFixture = () => {
     createRepository([], 'material') as any,
     createRepository([], 'assignment') as any,
     createRepository([], 'grade') as any,
+    createRepository([], 'result') as any,
     enrollmentRepository as any,
     taskRepository as any,
     taskProgressRepository as any,
@@ -262,13 +264,27 @@ describe('CoursesService learning process', () => {
   });
 
   it('unlocks task 2 after task 1 is completed successfully', async () => {
-    const { service } = createLearningProcessFixture();
+    const { service, taskProgressRepository } = createLearningProcessFixture();
 
     await service.startLearningTask('task-1', '3');
     const path = await service.completeLearningTask('task-1', '3');
 
     expect(path.tasks.find((task) => task.id === 'task-2')).toMatchObject({
       status: TaskProgressStatus.AVAILABLE,
+    });
+    expect(
+      taskProgressRepository.items.find((progress) => progress.taskId === 'task-2'),
+    ).toMatchObject({
+      enrollmentId: 'enrollment-3',
+      status: TaskProgressStatus.AVAILABLE,
+      unlockSource: TaskUnlockSource.AUTOMATIC,
+    });
+
+    const reloadedPath = await service.getLearningPathProgress('course-id', '3');
+
+    expect(reloadedPath.tasks.find((task) => task.id === 'task-2')).toMatchObject({
+      status: TaskProgressStatus.AVAILABLE,
+      unlockSource: TaskUnlockSource.AUTOMATIC,
     });
   });
 
@@ -297,7 +313,7 @@ describe('CoursesService learning process', () => {
   });
 
   it('allows teachers but not students to unlock a manual task', async () => {
-    const { service } = createLearningProcessFixture();
+    const { service, taskProgressRepository } = createLearningProcessFixture();
 
     await expect(
       service.manuallyUnlockLearningTask('task-3', { studentId: '3' }, '3'),
@@ -315,6 +331,47 @@ describe('CoursesService learning process', () => {
     expect(overview.tasks.find((task) => task.taskId === 'task-3')).toMatchObject({
       status: TaskProgressStatus.AVAILABLE,
     });
+    expect(
+      taskProgressRepository.items.find((progress) => progress.taskId === 'task-3'),
+    ).toMatchObject({
+      enrollmentId: 'enrollment-3',
+      status: TaskProgressStatus.AVAILABLE,
+      unlockSource: TaskUnlockSource.MANUAL,
+    });
+
+    const reloadedOverview = await service.getLearningTaskProgressForStudent(
+      'course-id',
+      '3',
+      '1',
+    );
+
+    expect(reloadedOverview.tasks.find((task) => task.taskId === 'task-3')).toMatchObject({
+      status: TaskProgressStatus.AVAILABLE,
+      unlockSource: TaskUnlockSource.MANUAL,
+    });
+  });
+
+  it('keeps repeated manual unlock idempotent without duplicate progress rows', async () => {
+    const { service, taskProgressRepository } = createLearningProcessFixture();
+
+    await service.manuallyUnlockLearningTask('task-3', { studentId: '3' }, '1');
+    const firstProgress = taskProgressRepository.items.find(
+      (progress) => progress.taskId === 'task-3',
+    );
+    const firstUnlockedAt = firstProgress?.unlockedAt;
+    const saveCallsAfterFirstUnlock = taskProgressRepository.save.mock.calls.length;
+
+    await service.manuallyUnlockLearningTask('task-3', { studentId: '3' }, '1');
+
+    expect(
+      taskProgressRepository.items.filter(
+        (progress) =>
+          progress.taskId === 'task-3' &&
+          progress.enrollmentId === 'enrollment-3',
+      ),
+    ).toHaveLength(1);
+    expect(firstProgress?.unlockedAt).toBe(firstUnlockedAt);
+    expect(taskProgressRepository.save).toHaveBeenCalledTimes(saveCallsAfterFirstUnlock);
   });
 
   it('keeps repeated successful completion idempotent', async () => {
@@ -336,6 +393,60 @@ describe('CoursesService learning process', () => {
       taskProgressRepository.items.filter((progress) => progress.taskId === 'task-2'),
     ).toHaveLength(1);
     expect(firstProgress?.completedAt).toBe(firstCompletedAt);
+  });
+
+  it('keeps a successful completion after a fresh repository-backed reload', async () => {
+    const { service, taskProgressRepository } = createLearningProcessFixture();
+
+    await service.startLearningTask('task-1', '3');
+    await service.completeLearningTask('task-1', '3');
+
+    expect(
+      taskProgressRepository.items.find(
+        (progress) =>
+          progress.taskId === 'task-1' &&
+          progress.enrollmentId === 'enrollment-3',
+      ),
+    ).toMatchObject({
+      status: TaskProgressStatus.COMPLETED,
+      completionPercentage: 100,
+      resultPassed: true,
+    });
+
+    const reloadedPath = await service.getLearningPathProgress('course-id', '3');
+
+    expect(reloadedPath.tasks.find((task) => task.id === 'task-1')).toMatchObject({
+      status: TaskProgressStatus.COMPLETED,
+      completionPercentage: 100,
+      resultPassed: true,
+    });
+  });
+
+  it('keeps progress records for different students separate', async () => {
+    const { service, taskProgressRepository } = createLearningProcessFixture();
+
+    await service.startLearningTask('task-1', '3');
+    await service.completeLearningTask('task-1', '3');
+
+    const otherStudentPath = await service.getLearningPathProgress('course-id', '4');
+
+    expect(otherStudentPath.tasks.find((task) => task.id === 'task-1')).toMatchObject({
+      status: TaskProgressStatus.AVAILABLE,
+    });
+    expect(
+      taskProgressRepository.items.filter((progress) => progress.taskId === 'task-1'),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          enrollmentId: 'enrollment-3',
+          status: TaskProgressStatus.COMPLETED,
+        }),
+        expect.objectContaining({
+          enrollmentId: 'enrollment-4',
+          status: TaskProgressStatus.AVAILABLE,
+        }),
+      ]),
+    );
   });
 
   it('rejects cyclic and self-referencing prerequisites', async () => {

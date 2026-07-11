@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
 import LearningProcessPanel from '../LearningProcessPanel.vue'
-import { TaskProgressStatus, TaskUnlockMode, type LearningPath, type LearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
+import { TaskProgressStatus, TaskUnlockMode, TaskUnlockSource, type LearningPath, type LearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
 import { DARK_THEME_NAME, LIGHT_THEME_NAME } from '@/services/theme.service'
 
 const learningTaskServiceMock = vi.hoisted(() => ({
@@ -95,16 +95,16 @@ const createPath = (statuses: Record<string, TaskProgressStatus>): LearningPath 
   }
 }
 
-const createProgressOverview = (): StudentProgressOverview[] => [
+const createProgressOverview = (task3Status = TaskProgressStatus.LOCKED): StudentProgressOverview[] => [
   {
     enrollmentId: 'enrollment-3',
     studentId: '3',
     totalTasks: 3,
     completedTasks: 1,
     inProgressTasks: 0,
-    availableTasks: 1,
+    availableTasks: task3Status === TaskProgressStatus.AVAILABLE ? 2 : 1,
     failedTasks: 0,
-    lockedTasks: 1,
+    lockedTasks: task3Status === TaskProgressStatus.LOCKED ? 1 : 0,
     progressPercentage: 33,
     tasks: [
       {
@@ -118,8 +118,9 @@ const createProgressOverview = (): StudentProgressOverview[] => [
         taskId: 'task-3',
         title: 'Abschlussaufgabe bearbeiten',
         order: 3,
-        status: TaskProgressStatus.LOCKED,
-        completionPercentage: 0
+        status: task3Status,
+        completionPercentage: 0,
+        unlockSource: task3Status === TaskProgressStatus.AVAILABLE ? TaskUnlockSource.MANUAL : undefined
       }
     ]
   }
@@ -249,6 +250,27 @@ describe('LearningProcessPanel', () => {
     expect(wrapper.text()).toContain('Begonnen')
   })
 
+  it('does not show a durable success state after a failed start request', async () => {
+    learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(
+      createPath({
+        'task-1': TaskProgressStatus.AVAILABLE,
+        'task-2': TaskProgressStatus.LOCKED,
+        'task-3': TaskProgressStatus.LOCKED
+      })
+    )
+    learningTaskServiceMock.startTask.mockRejectedValueOnce(new Error('Serverfehler'))
+
+    const wrapper = mountPanel()
+    await flushPromises()
+    await findButtonByText(wrapper, 'Aufgabe beginnen')?.trigger('click')
+    await flushPromises()
+
+    expect(learningTaskServiceMock.startTask).toHaveBeenCalledWith('task-1')
+    expect(wrapper.text()).toContain('Serverfehler')
+    expect(wrapper.text()).toContain('Verfügbar')
+    expect(wrapper.text()).not.toContain('Begonnen')
+  })
+
   it('updates the path after a successful completion', async () => {
     learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(
       createPath({
@@ -303,7 +325,7 @@ describe('LearningProcessPanel', () => {
   it('lets teachers manually unlock a task', async () => {
     learningTaskServiceMock.listTasks.mockResolvedValue(baseTasks)
     learningTaskServiceMock.getProgressOverview.mockResolvedValue(createProgressOverview())
-    learningTaskServiceMock.manuallyUnlockTask.mockResolvedValue(createProgressOverview()[0])
+    learningTaskServiceMock.manuallyUnlockTask.mockResolvedValue(createProgressOverview(TaskProgressStatus.AVAILABLE)[0])
 
     const wrapper = mountPanel(true)
     await flushPromises()
@@ -311,6 +333,23 @@ describe('LearningProcessPanel', () => {
     await flushPromises()
 
     expect(learningTaskServiceMock.manuallyUnlockTask).toHaveBeenCalledWith('task-3', '3')
+    expect(wrapper.text()).toContain('Verfügbar')
+    expect(learningTaskServiceMock.getProgressOverview).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the teacher overview unchanged when manual unlock fails', async () => {
+    learningTaskServiceMock.listTasks.mockResolvedValue(baseTasks)
+    learningTaskServiceMock.getProgressOverview.mockResolvedValue(createProgressOverview())
+    learningTaskServiceMock.manuallyUnlockTask.mockRejectedValueOnce(new Error('Freischaltung fehlgeschlagen'))
+
+    const wrapper = mountPanel(true)
+    await flushPromises()
+    await findButtonByText(wrapper, 'Freischalten')?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Freischaltung fehlgeschlagen')
+    expect(wrapper.text()).toContain('Gesperrt')
+    expect(wrapper.text()).not.toContain('Aufgabe freigeschaltet.')
   })
 
   it.each([LIGHT_THEME_NAME, DARK_THEME_NAME])('renders the student task view in %s', async (themeName) => {
@@ -329,5 +368,24 @@ describe('LearningProcessPanel', () => {
     expect(wrapper.text()).toContain('Erfolgreich abgeschlossen')
     expect(wrapper.text()).toContain('Verfügbar')
     expect(wrapper.text()).toContain('Gesperrt')
+  })
+
+  it('loads server progress when opened and does not replace it with local defaults', async () => {
+    learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(
+      createPath({
+        'task-1': TaskProgressStatus.COMPLETED,
+        'task-2': TaskProgressStatus.COMPLETED,
+        'task-3': TaskProgressStatus.AVAILABLE
+      })
+    )
+
+    const wrapper = mountPanel(false)
+    await flushPromises()
+
+    expect(learningTaskServiceMock.getMyLearningPath).toHaveBeenCalledWith('course-id')
+    expect(wrapper.text()).toContain('2 von 3 Aufgaben erfolgreich abgeschlossen.')
+    expect(wrapper.text()).toContain('Abschlussaufgabe bearbeiten')
+    expect(wrapper.text()).toContain('Verfügbar')
+    expect(wrapper.text()).not.toContain('Noch keine Aufgaben verfügbar.')
   })
 })

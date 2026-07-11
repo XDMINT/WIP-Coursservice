@@ -41,4 +41,19 @@ watch(
 onMounted(() => {})
 </script>
 
-<style scoped lang="scss"></style>
+<style lang="scss">
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+.v-application {
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
+}
+</style>

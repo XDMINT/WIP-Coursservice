@@ -92,16 +92,17 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
   }
 
   private async upsertDemoCourse(): Promise<Course> {
-    let course = await this.courseRepository.findOne({
+    const existingCourse = await this.courseRepository.findOne({
       where: { external_id: DEMO_COURSE_EXTERNAL_ID },
     });
 
-    if (!course) {
-      course = new Course();
-      course.external_id = DEMO_COURSE_EXTERNAL_ID;
-      course.created_by = DEMO_SEED_USER;
+    if (existingCourse) {
+      return existingCourse;
     }
 
+    const course = new Course();
+    course.external_id = DEMO_COURSE_EXTERNAL_ID;
+    course.created_by = DEMO_SEED_USER;
     course.title = 'Demo-Kurs Lernprozess';
     course.description = 'Deterministischer Demo-Kurs für Aufgaben, Fortschritt und Freischaltlogik.';
     course.semester = 'Demo';
@@ -118,21 +119,22 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
     userId: string,
     role: CourseMemberRole,
   ): Promise<Enrollment> {
-    let enrollment = await this.enrollmentRepository.findOne({
+    const existingEnrollment = await this.enrollmentRepository.findOne({
       where: {
         courseId: course.id,
         userId,
       },
     });
 
-    if (!enrollment) {
-      enrollment = new Enrollment();
-      enrollment.courseId = course.id;
-      enrollment.course = course;
-      enrollment.userId = userId;
-      enrollment.createdBy = DEMO_SEED_USER;
+    if (existingEnrollment) {
+      return existingEnrollment;
     }
 
+    const enrollment = new Enrollment();
+    enrollment.courseId = course.id;
+    enrollment.course = course;
+    enrollment.userId = userId;
+    enrollment.createdBy = DEMO_SEED_USER;
     enrollment.role = role;
     enrollment.updatedBy = DEMO_SEED_USER;
 
@@ -150,14 +152,16 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
         },
       });
 
-      if (!task) {
-        task = new Task();
-        task.courseId = course.id;
-        task.course = course;
-        task.demoKey = seed.demoKey;
-        task.createdBy = DEMO_SEED_USER;
+      if (task) {
+        tasksByDemoKey.set(seed.demoKey, task);
+        continue;
       }
 
+      task = new Task();
+      task.courseId = course.id;
+      task.course = course;
+      task.demoKey = seed.demoKey;
+      task.createdBy = DEMO_SEED_USER;
       task.title = seed.title;
       task.description = seed.description;
       task.type = 'DEMO_TASK';

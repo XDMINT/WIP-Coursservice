@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { COLOR_SCHEME_QUERY, DARK_THEME_NAME, LIGHT_THEME_NAME, getThemeNameForSystemPreference, installSystemColorScheme } from '../theme.service'
+import { COLOR_SCHEME_QUERY, DARK_THEME_NAME, LIGHT_THEME_NAME, darkThemeColors, getThemeNameForSystemPreference, installSystemColorScheme, lightThemeColors } from '../theme.service'
 
 const createThemeTarget = () => ({
   theme: {
@@ -73,5 +73,17 @@ describe('theme.service', () => {
     expect(() => installSystemColorScheme(target, undefined)).not.toThrow()
     expect(getThemeNameForSystemPreference(undefined)).toBe(LIGHT_THEME_NAME)
     expect(target.theme.global.name.value).toBe(LIGHT_THEME_NAME)
+  })
+
+  it('keeps global backgrounds and surfaces neutral in both themes', () => {
+    expect(lightThemeColors.background).toBe('#FFFFFF')
+    expect(lightThemeColors.surface).toBe('#FFFFFF')
+    expect(lightThemeColors['surface-variant']).toBe('#F2F4F7')
+    expect(lightThemeColors['surface-muted']).toBe('#F6F7F9')
+
+    expect(darkThemeColors.background).toBe('#0B0B0D')
+    expect(darkThemeColors.surface).toBe('#181A1B')
+    expect(darkThemeColors['surface-variant']).toBe('#26282B')
+    expect(darkThemeColors['surface-muted']).toBe('#202124')
   })
 })

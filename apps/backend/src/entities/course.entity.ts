@@ -25,6 +25,7 @@ import { ContentRelease } from './content-release.entity';
 import { CalendarEvent } from './calendar-event.entity';
 import { Task } from './task.entity';
 import { ContentTemplate } from './content-template.entity';
+import { CourseResult } from './course-result.entity';
 
 /**
  * Course Status Enum
@@ -116,4 +117,7 @@ export class Course {
 
     @OneToMany(() => ContentTemplate, (template) => template.course)
     templates: ContentTemplate[];
+
+    @OneToMany(() => CourseResult, (result) => result.course)
+    results: CourseResult[];
 }
