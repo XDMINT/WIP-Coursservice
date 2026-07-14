@@ -2,7 +2,7 @@
 
 ## Ausgangslage
 
-Das Repository wurde aus einem Frontend- und einem Backend-Repository zusammengefuehrt. Das Backend enthielt Spuren einer frueheren Kubernetes-/Microservice-Architektur mit Traefik, Helm-Werten, Dagu-Workflow-Service und separaten Service-Namen. Fuer das aktuelle Abschlussprojekt ist diese Betriebsform zu komplex.
+Das Repository wurde aus einem Frontend- und einem Backend-Repository zusammengefuehrt. Das Backend enthielt Spuren einer frueheren Kubernetes-/Microservice-Architektur mit Traefik, Helm-Werten, Dagu-Workflow-Service und separaten Service-Namen.
 
 ## Ziel
 
