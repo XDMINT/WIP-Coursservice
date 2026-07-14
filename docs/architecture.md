@@ -33,7 +33,8 @@ Fuer spaetere Services sind eigene externe Pfade vorgesehen, zum Beispiel `/api/
 - Frontend: Vue/Vite-SPA, statisch durch Nginx im Container ausgeliefert.
 - Backend: aktueller Course Service als NestJS-Anwendung mit TypeORM, globalem `/api`-Prefix, Health-Endpunkt und zentraler Fehlerantwort.
 - Course PostgreSQL: relationale Datenbank des Course Service mit eigenem Volume und `pg_isready`-Healthcheck.
-- Traefik: technischer Edge Router mit Docker Provider und `exposedByDefault=false`.
+- Traefik: technischer Edge Router mit Docker Provider, `exposedByDefault=false`
+  und JSON-Access-Logs ohne Header.
 
 ## Netzwerke
 
@@ -85,6 +86,13 @@ Ein spaeterer externer Task Service wuerde Ergebnisse ueber eine dokumentierte
 API melden; der Course Service bleibt fuer Fortschritt und Freischaltregeln
 verantwortlich.
 
+Die einfache Gruppenarbeit der Mini-Version liegt ebenfalls bewusst im Course
+Service. Gruppen sind CourseRun-bezogen, werden von Lehrenden/Admins verwaltet
+und nutzen das bestehende `TaskAssessment`-Modell mit Zieltyp `GROUP` statt
+eines zweiten Bewertungssystems. Neue CourseRuns uebernehmen Aufgabenregeln
+inklusive `workMode`, aber keine Gruppen, Gruppenmitglieder,
+Gruppenfortschritte oder Gruppenbewertungen.
+
 ## Kurskontext und Berechtigungen
 
 Fachliche Kurs-Features sollen den zentralen Kurskontext verwenden:
@@ -110,6 +118,21 @@ PostgreSQL enthaelt nur Metadaten wie Materialtyp, Dateiname, MIME-Type,
 Dateigroesse, Tags, Sortierung und Veroeffentlichungsstatus.
 
 Ein spaeterer eigenstaendiger Service darf eine eigene PostgreSQL-Instanz, eigene Migrationen, eigene Zugangsdaten, ein eigenes Volume und ein eigenes internes Netzwerk besitzen. Kein Service darf direkt auf die Datenbank, Tabellen oder Repositories eines anderen Services zugreifen. Serviceuebergreifender Datenaustausch erfolgt ueber dokumentierte APIs oder bei spaeter begruendetem Bedarf ueber Events.
+
+## Logging und Audit
+
+Die Mini-Version nutzt keine externe zentrale Logging-Infrastruktur. Technische
+Backend-Logs und Request-Logs werden strukturiert ueber stdout/stderr
+ausgegeben und koennen mit `docker compose logs backend` gelesen werden. Jeder
+API-Request erhaelt eine `X-Request-ID`, die in Request-Logs, Fehlerlogs und
+Audit-Events verwendet wird.
+
+Fachliche Audit-Events werden persistent in PostgreSQL in `audit_events`
+gespeichert. Sie dokumentieren erfolgreiche Aenderungen an Kursen,
+Durchlaeufen, Inhaltsversionen, Materialien, Aufgaben, Einschreibungen,
+Lernfortschritt und Bewertungen. Lehrende mit Kursverwaltungsrecht koennen die
+letzten Ereignisse ueber die Audit-Ansicht im Kurs einsehen; Studierende sehen
+diese Ansicht nicht. Details stehen in `docs/logging-audit.md`.
 
 ## Sicherheit und Konfiguration
 

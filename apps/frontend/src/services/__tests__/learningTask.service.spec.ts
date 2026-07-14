@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import learningTaskService, { TaskProgressStatus, TaskUnlockMode, formatTaskStatus, formatUnlockMode } from '../learningTask.service'
+import learningTaskService, { TaskAssessmentStatus, TaskGradingMode, TaskProgressStatus, TaskUnlockMode, formatAssessmentStatus, formatGradingMode, formatTaskStatus, formatUnlockMode } from '../learningTask.service'
 import { apiClient } from '../apiClient'
 
 vi.mock('../apiClient', () => ({
@@ -43,7 +43,7 @@ describe('learningTaskService', () => {
     expect(apiClient.get).toHaveBeenNthCalledWith(2, '/courses/course-id/runs/run-id/progress')
   })
 
-  it('starts and completes tasks through actor-aware task endpoints', async () => {
+  it('starts and self-confirms tasks through actor-aware task endpoints', async () => {
     vi.mocked(apiClient.post).mockResolvedValue({
       data: {
         tasks: []
@@ -51,10 +51,44 @@ describe('learningTaskService', () => {
     })
 
     await learningTaskService.startTask('task-id')
-    await learningTaskService.completeTask('task-id')
+    await learningTaskService.selfConfirmTask('task-id')
 
     expect(apiClient.post).toHaveBeenNthCalledWith(1, '/courses/tasks/task-id/start')
-    expect(apiClient.post).toHaveBeenNthCalledWith(2, '/courses/tasks/task-id/complete')
+    expect(apiClient.post).toHaveBeenNthCalledWith(2, '/courses/tasks/task-id/self-confirm')
+  })
+
+  it('submits, mock-evaluates and manually assesses tasks through dedicated endpoints', async () => {
+    vi.mocked(apiClient.post).mockResolvedValue({
+      data: {
+        tasks: []
+      }
+    })
+
+    await learningTaskService.submitTask('task-id', { answer: 'demo' })
+    await learningTaskService.mockEvaluateTask('task-id', false)
+    await learningTaskService.assessTaskManually('course-id', 'run-id', 'task-id', 'student-id', {
+      feedback: 'Bitte nacharbeiten.',
+      maxPoints: 10,
+      passed: false,
+      points: 4
+    })
+    await learningTaskService.resetTaskAssessment('course-id', 'run-id', 'task-id', 'student-id')
+
+    expect(apiClient.post).toHaveBeenNthCalledWith(1, '/courses/tasks/task-id/submit', {
+      submissionData: {
+        answer: 'demo'
+      }
+    })
+    expect(apiClient.post).toHaveBeenNthCalledWith(2, '/courses/tasks/task-id/mock-evaluate', {
+      passed: false
+    })
+    expect(apiClient.post).toHaveBeenNthCalledWith(3, '/courses/course-id/runs/run-id/tasks/task-id/assessments/student-id/manual', {
+      feedback: 'Bitte nacharbeiten.',
+      maxPoints: 10,
+      passed: false,
+      points: 4
+    })
+    expect(apiClient.post).toHaveBeenNthCalledWith(4, '/courses/course-id/runs/run-id/tasks/task-id/assessments/student-id/reset')
   })
 
   it('unlocks manual tasks for a selected student', async () => {
@@ -74,6 +108,9 @@ describe('learningTaskService', () => {
   it('formats task statuses and unlock modes for display', () => {
     expect(formatTaskStatus(TaskProgressStatus.LOCKED)).toBe('Gesperrt')
     expect(formatTaskStatus(TaskProgressStatus.COMPLETED)).toBe('Erfolgreich abgeschlossen')
+    expect(formatTaskStatus(TaskProgressStatus.SUBMITTED)).toBe('Wartet auf Bewertung')
+    expect(formatGradingMode(TaskGradingMode.AUTOMATIC_MOCK)).toBe('Automatisch bewertet (Mock)')
+    expect(formatAssessmentStatus(TaskAssessmentStatus.PENDING_REVIEW)).toBe('Wartet auf Bewertung')
     expect(formatUnlockMode(TaskUnlockMode.AUTOMATIC)).toBe('Automatisch')
     expect(formatUnlockMode(TaskUnlockMode.MANUAL)).toBe('Manuell')
   })

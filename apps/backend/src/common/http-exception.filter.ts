@@ -6,22 +6,32 @@ import {
   HttpException,
   HttpStatus,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ApiError } from './api-errors';
+import { getCurrentRequestContext } from './request-context';
+import { getRequestActor } from './request-actor';
+import { RequestWithContext } from './request-context.middleware';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HttpExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost) {
     const http = host.switchToHttp();
     const response = http.getResponse<Response>();
-    const request = http.getRequest<Request>();
+    const request = http.getRequest<RequestWithContext>();
     const normalizedException = this.normalizeException(exception);
     const status = normalizedException.getStatus();
     const exceptionResponse = normalizedException.getResponse();
     const message = this.getResponseMessage(exceptionResponse, normalizedException);
     const code = this.getResponseCode(exception, exceptionResponse, status);
+    const requestContext = getCurrentRequestContext();
+    const requestId = requestContext?.requestId ?? request.requestId;
+
+    this.logUnexpectedError(exception, request, status, requestId);
 
     response.status(status).json({
       statusCode: status,
@@ -33,8 +43,41 @@ export class HttpExceptionFilter implements ExceptionFilter {
           ? exception.details
           : undefined,
       path: request.url,
+      requestId,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  private logUnexpectedError(
+    exception: unknown,
+    request: Request,
+    status: number,
+    requestId?: string,
+  ): void {
+    if (
+      status < HttpStatus.INTERNAL_SERVER_ERROR &&
+      (exception instanceof HttpException || exception instanceof ApiError)
+    ) {
+      return;
+    }
+
+    const actor = getRequestActor(request);
+    const requestContext = getCurrentRequestContext();
+    const error = exception instanceof Error ? exception : undefined;
+
+    this.logger.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'unexpected_error',
+        errorType: error?.name ?? typeof exception,
+        message: error?.message ?? 'Unknown error',
+        stack: error?.stack,
+        path: (request.originalUrl ?? request.url ?? '').split('?')[0],
+        requestId,
+        userId: requestContext?.actorUserId ?? actor.userId,
+        role: requestContext?.actorRole ?? actor.globalRoles[0],
+      }),
+    );
   }
 
   private normalizeException(exception: unknown): HttpException {

@@ -565,4 +565,71 @@ describe('courseService', () => {
     })
     expect(apiClient.get).toHaveBeenCalledWith('/courses/course-id/runs/run-id/enrollments')
   })
+
+  it('loads audit events through course and run scoped endpoints', async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 'audit-1',
+            event_type: 'COURSE_CREATED',
+            actor_user_id: '1',
+            actor_role: 'TEACHER',
+            course_id: 'course-id',
+            course_run_id: 'run-id',
+            course_version_id: 'version-id',
+            entity_type: 'course',
+            entity_id: 'course-id',
+            summary: 'Kurs erstellt',
+            request_id: 'request-id',
+            created_at: '2026-07-14T12:00:00.000Z'
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        data: []
+      })
+
+    await expect(courseService.listAuditEvents('course-id')).resolves.toEqual([
+      {
+        id: 'audit-1',
+        eventType: 'COURSE_CREATED',
+        actorUserId: '1',
+        actorRole: 'TEACHER',
+        courseId: 'course-id',
+        courseRunId: 'run-id',
+        courseVersionId: 'version-id',
+        entityType: 'course',
+        entityId: 'course-id',
+        summary: 'Kurs erstellt',
+        metadataJson: undefined,
+        requestId: 'request-id',
+        createdAt: '2026-07-14T12:00:00.000Z'
+      }
+    ])
+    await expect(
+      courseService.listAuditEvents('course-id', {
+        courseRunId: 'run-id',
+        eventType: 'TASK_CREATED',
+        limit: 25
+      })
+    ).resolves.toEqual([])
+
+    expect(apiClient.get).toHaveBeenNthCalledWith(1, '/courses/course-id/audit-events', {
+      params: {
+        eventType: undefined,
+        from: undefined,
+        to: undefined,
+        limit: undefined
+      }
+    })
+    expect(apiClient.get).toHaveBeenNthCalledWith(2, '/courses/course-id/runs/run-id/audit-events', {
+      params: {
+        eventType: 'TASK_CREATED',
+        from: undefined,
+        to: undefined,
+        limit: 25
+      }
+    })
+  })
 })

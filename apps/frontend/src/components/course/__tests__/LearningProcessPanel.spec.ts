@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
 import LearningProcessPanel from '../LearningProcessPanel.vue'
-import { TaskProgressStatus, TaskUnlockMode, TaskUnlockSource, type LearningPath, type LearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
+import { TaskAssessmentStatus, TaskGradingMode, TaskProgressStatus, TaskUnlockMode, TaskUnlockSource, TaskWorkMode, type LearningPath, type LearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
 import { DARK_THEME_NAME, LIGHT_THEME_NAME } from '@/services/theme.service'
 
 const learningTaskServiceMock = vi.hoisted(() => ({
+  assessTaskManually: vi.fn(),
   completeTask: vi.fn(),
   createTask: vi.fn(),
   deleteTask: vi.fn(),
@@ -15,8 +16,14 @@ const learningTaskServiceMock = vi.hoisted(() => ({
   getMyLearningPath: vi.fn(),
   getProgressOverview: vi.fn(),
   listTasks: vi.fn(),
+  mockEvaluateTask: vi.fn(),
   manuallyUnlockTask: vi.fn(),
+  resetTaskAssessment: vi.fn(),
+  selfConfirmTask: vi.fn(),
+  startGroupTask: vi.fn(),
   startTask: vi.fn(),
+  submitGroupTask: vi.fn(),
+  submitTask: vi.fn(),
   updateTask: vi.fn()
 }))
 
@@ -42,6 +49,11 @@ const baseTasks: LearningTask[] = [
     type: 'DEMO_TASK',
     order: 1,
     unlockMode: TaskUnlockMode.IMMEDIATE,
+    gradingMode: TaskGradingMode.SELF_CONFIRMATION,
+    maxPoints: null,
+    passThreshold: null,
+    feedbackRequired: false,
+    allowRetries: true,
     isPublished: true
   },
   {
@@ -53,6 +65,11 @@ const baseTasks: LearningTask[] = [
     order: 2,
     unlockMode: TaskUnlockMode.AUTOMATIC,
     prerequisiteTaskId: 'task-1',
+    gradingMode: TaskGradingMode.MANUAL,
+    maxPoints: 10,
+    passThreshold: 50,
+    feedbackRequired: true,
+    allowRetries: true,
     isPublished: true
   },
   {
@@ -64,6 +81,11 @@ const baseTasks: LearningTask[] = [
     order: 3,
     unlockMode: TaskUnlockMode.MANUAL,
     prerequisiteTaskId: 'task-2',
+    gradingMode: TaskGradingMode.AUTOMATIC_MOCK,
+    maxPoints: 10,
+    passThreshold: 50,
+    feedbackRequired: false,
+    allowRetries: true,
     isPublished: true
   }
 ]
@@ -168,6 +190,7 @@ const mountPanel = (canManage = false, extraProps: Partial<InstanceType<typeof L
         },
         'v-select': passThroughStub,
         'v-switch': passThroughStub,
+        'v-textarea': passThroughStub,
         'v-text-field': passThroughStub
       }
     }
@@ -272,7 +295,7 @@ describe('LearningProcessPanel', () => {
     expect(wrapper.text()).not.toContain('Begonnen')
   })
 
-  it('updates the path after a successful completion', async () => {
+  it('updates the path after a successful self confirmation', async () => {
     learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(
       createPath({
         'task-1': TaskProgressStatus.IN_PROGRESS,
@@ -280,7 +303,7 @@ describe('LearningProcessPanel', () => {
         'task-3': TaskProgressStatus.LOCKED
       })
     )
-    learningTaskServiceMock.completeTask.mockResolvedValueOnce(
+    learningTaskServiceMock.selfConfirmTask.mockResolvedValueOnce(
       createPath({
         'task-1': TaskProgressStatus.COMPLETED,
         'task-2': TaskProgressStatus.AVAILABLE,
@@ -290,17 +313,108 @@ describe('LearningProcessPanel', () => {
 
     const wrapper = mountPanel()
     await flushPromises()
-    await findButtonByText(wrapper, 'Erfolgreich abschließen')?.trigger('click')
+    await findButtonByText(wrapper, 'Als erledigt markieren')?.trigger('click')
     await flushPromises()
     await findButtonByText(wrapper, 'Bestätigen')?.trigger('click')
     await flushPromises()
 
-    expect(learningTaskServiceMock.completeTask).toHaveBeenCalledWith('task-1')
+    expect(learningTaskServiceMock.selfConfirmTask).toHaveBeenCalledWith('task-1')
+    expect(wrapper.text()).toContain('Aufgabe als erledigt markiert.')
     expect(wrapper.text()).toContain('Erfolgreich abgeschlossen')
     expect(wrapper.text()).toContain('mdi-check-circle-outline')
     expect(wrapper.text()).toContain('Verfügbar')
     expect(wrapper.text()).toContain('Abschlussaufgabe bearbeiten')
     expect(wrapper.text()).toContain('Gesperrt')
+  })
+
+  it('uses distinct student actions for manual and mock assessed tasks', async () => {
+    learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(
+      createPath({
+        'task-1': TaskProgressStatus.COMPLETED,
+        'task-2': TaskProgressStatus.IN_PROGRESS,
+        'task-3': TaskProgressStatus.IN_PROGRESS
+      })
+    )
+    learningTaskServiceMock.submitTask.mockResolvedValueOnce(
+      createPath({
+        'task-1': TaskProgressStatus.COMPLETED,
+        'task-2': TaskProgressStatus.SUBMITTED,
+        'task-3': TaskProgressStatus.IN_PROGRESS
+      })
+    )
+    learningTaskServiceMock.mockEvaluateTask.mockResolvedValueOnce(
+      createPath({
+        'task-1': TaskProgressStatus.COMPLETED,
+        'task-2': TaskProgressStatus.SUBMITTED,
+        'task-3': TaskProgressStatus.COMPLETED
+      })
+    )
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Aufgabe abgeben')
+    expect(wrapper.text()).toContain('Abgabe simulieren')
+    expect(wrapper.text()).not.toContain('Bestanden markieren')
+    expect(wrapper.text()).not.toContain('Erfolgreich abschließen')
+
+    await findButtonByText(wrapper, 'Aufgabe abgeben')?.trigger('click')
+    await flushPromises()
+
+    expect(learningTaskServiceMock.submitTask).toHaveBeenCalledWith('task-2')
+    expect(wrapper.text()).toContain('Wartet auf Bewertung')
+
+    await findButtonByText(wrapper, 'Abgabe simulieren')?.trigger('click')
+    await flushPromises()
+
+    expect(learningTaskServiceMock.mockEvaluateTask).toHaveBeenCalledWith('task-3', true)
+    expect(wrapper.text()).toContain('Demo-Abgabe wurde automatisch bewertet.')
+  })
+
+  it('labels group tasks and uses group-specific student actions', async () => {
+    const initialPath = createPath({
+      'task-1': TaskProgressStatus.COMPLETED,
+      'task-2': TaskProgressStatus.IN_PROGRESS,
+      'task-3': TaskProgressStatus.LOCKED
+    })
+    initialPath.tasks = initialPath.tasks.map((task) =>
+      task.id === 'task-2'
+        ? {
+            ...task,
+            workMode: TaskWorkMode.GROUP,
+            group: {
+              id: 'group-1',
+              name: 'Gruppe A',
+              status: TaskProgressStatus.IN_PROGRESS
+            }
+          }
+        : task
+    )
+    const submittedPath = {
+      ...initialPath,
+      tasks: initialPath.tasks.map((task) =>
+        task.id === 'task-2'
+          ? { ...task, status: TaskProgressStatus.SUBMITTED }
+          : task
+      )
+    }
+    learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(initialPath)
+    learningTaskServiceMock.submitGroupTask.mockResolvedValueOnce(submittedPath)
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Gruppenaufgabe')
+    expect(wrapper.text()).toContain('Gruppe A')
+    expect(wrapper.text()).toContain('Gruppenaufgabe abgeben')
+    expect(wrapper.text()).not.toContain('Als erledigt markieren')
+
+    await findButtonByText(wrapper, 'Gruppenaufgabe abgeben')?.trigger('click')
+    await flushPromises()
+
+    expect(learningTaskServiceMock.submitGroupTask).toHaveBeenCalledWith('task-2')
+    expect(learningTaskServiceMock.submitTask).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Wartet auf Bewertung')
   })
 
   it('shows management functions only for teachers', async () => {
@@ -336,6 +450,70 @@ describe('LearningProcessPanel', () => {
     expect(learningTaskServiceMock.manuallyUnlockTask).toHaveBeenCalledWith('task-3', '3')
     expect(wrapper.text()).toContain('Verfügbar')
     expect(learningTaskServiceMock.getProgressOverview).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets teachers assess submitted manual tasks in a selected run', async () => {
+    const submittedOverview: StudentProgressOverview[] = [
+      {
+        enrollmentId: 'enrollment-3',
+        studentId: '3',
+        totalTasks: 3,
+        completedTasks: 1,
+        inProgressTasks: 0,
+        availableTasks: 1,
+        failedTasks: 0,
+        lockedTasks: 1,
+        progressPercentage: 33,
+        tasks: [
+          {
+            taskId: 'task-2',
+            title: 'Grundlagen anwenden',
+            order: 2,
+            status: TaskProgressStatus.SUBMITTED,
+            completionPercentage: 0,
+            assessment: {
+              id: 'assessment-1',
+              courseRunId: 'run-1',
+              courseVersionId: 'version-1',
+              taskId: 'task-2',
+              studentId: '3',
+              gradingMode: TaskGradingMode.MANUAL,
+              status: TaskAssessmentStatus.PENDING_REVIEW,
+              points: null,
+              maxPoints: 10,
+              passThreshold: 50,
+              passed: null
+            }
+          }
+        ]
+      }
+    ]
+
+    learningTaskServiceMock.listTasks.mockResolvedValue(baseTasks)
+    learningTaskServiceMock.getProgressOverview.mockResolvedValue(submittedOverview)
+    learningTaskServiceMock.assessTaskManually.mockResolvedValue({
+      ...submittedOverview[0].tasks[0].assessment,
+      status: TaskAssessmentStatus.PASSED,
+      points: 10,
+      passed: true
+    })
+
+    const wrapper = mountPanel(true, {
+      courseRunId: 'run-1'
+    })
+    await flushPromises()
+    await findButtonByText(wrapper, 'Bewerten')?.trigger('click')
+    await flushPromises()
+    await findButtonByText(wrapper, 'Bewertung speichern')?.trigger('click')
+    await flushPromises()
+
+    expect(learningTaskServiceMock.assessTaskManually).toHaveBeenCalledWith('course-id', 'run-1', 'task-2', '3', {
+      feedback: null,
+      maxPoints: 10,
+      passed: true,
+      points: 10
+    })
+    expect(wrapper.text()).toContain('Aufgabe als bestanden bewertet.')
   })
 
   it('loads historical teacher data by run and disables editing actions', async () => {

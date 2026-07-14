@@ -1,10 +1,12 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { CoursesModule } from './courses.module';
 import { HealthController } from './health.controller';
 import { createDatabaseOptions } from './config/database.config';
+import { BackendStartupLogger } from './common/backend-startup-logger.service';
+import { RequestContextMiddleware } from './common/request-context.middleware';
 
 @Module({
   imports: [
@@ -18,5 +20,10 @@ import { createDatabaseOptions } from './config/database.config';
     CoursesModule,
   ],
   controllers: [HealthController],
+  providers: [BackendStartupLogger],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestContextMiddleware).forRoutes('*');
+  }
+}

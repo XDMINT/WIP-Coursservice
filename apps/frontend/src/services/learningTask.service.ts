@@ -10,8 +10,30 @@ export enum TaskProgressStatus {
   LOCKED = 'LOCKED',
   AVAILABLE = 'AVAILABLE',
   IN_PROGRESS = 'IN_PROGRESS',
+  SUBMITTED = 'SUBMITTED',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED'
+}
+
+export enum TaskGradingMode {
+  NOT_GRADED = 'NOT_GRADED',
+  SELF_CONFIRMATION = 'SELF_CONFIRMATION',
+  MANUAL = 'MANUAL',
+  AUTOMATIC_MOCK = 'AUTOMATIC_MOCK'
+}
+
+export enum TaskWorkMode {
+  INDIVIDUAL = 'INDIVIDUAL',
+  GROUP = 'GROUP'
+}
+
+export enum TaskAssessmentStatus {
+  NOT_SUBMITTED = 'NOT_SUBMITTED',
+  SUBMITTED = 'SUBMITTED',
+  PENDING_REVIEW = 'PENDING_REVIEW',
+  PASSED = 'PASSED',
+  FAILED = 'FAILED',
+  AUTO_EVALUATED = 'AUTO_EVALUATED'
 }
 
 export enum TaskUnlockSource {
@@ -32,6 +54,12 @@ export type LearningTask = {
   unlockMode: TaskUnlockMode
   prerequisiteTaskId?: string
   completionCriteria?: Record<string, unknown>
+  gradingMode: TaskGradingMode
+  workMode?: TaskWorkMode
+  maxPoints?: number | null
+  passThreshold?: number | null
+  feedbackRequired: boolean
+  allowRetries: boolean
   isPublished: boolean
   demoKey?: string
   createdAt?: string
@@ -48,6 +76,8 @@ export type StudentLearningTask = LearningTask & {
   completedAt?: string
   resultPassed?: boolean
   unlockSource?: TaskUnlockSource
+  assessment?: TaskAssessment | null
+  group?: StudentTaskGroupContext | null
 }
 
 export type LearningPath = {
@@ -74,6 +104,39 @@ export type LearningTaskProgress = {
   completedAt?: string
   resultPassed?: boolean
   unlockSource?: TaskUnlockSource
+  assessment?: TaskAssessment | null
+  groupId?: string | null
+  groupName?: string | null
+}
+
+export type TaskAssessment = {
+  id: string
+  courseRunId: string
+  courseVersionId: string
+  taskId: string
+  assessmentTargetType: 'INDIVIDUAL' | 'GROUP'
+  studentId?: string | null
+  groupId?: string | null
+  gradingMode: TaskGradingMode
+  status: TaskAssessmentStatus
+  points?: number | null
+  maxPoints?: number | null
+  passThreshold?: number | null
+  passed?: boolean | null
+  feedback?: string | null
+  assessedBy?: string | null
+  assessedAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type StudentTaskGroupContext = {
+  id: string
+  name: string
+  status?: TaskProgressStatus
+  startedAt?: string | null
+  submittedAt?: string | null
+  completedAt?: string | null
 }
 
 export type StudentProgressOverview = {
@@ -97,6 +160,12 @@ export type UpsertLearningTaskInput = {
   unlockMode?: TaskUnlockMode
   prerequisiteTaskId?: string | null
   completionCriteria?: Record<string, unknown>
+  gradingMode?: TaskGradingMode
+  workMode?: TaskWorkMode
+  maxPoints?: number | null
+  passThreshold?: number | null
+  feedbackRequired?: boolean
+  allowRetries?: boolean
   isPublished?: boolean
 }
 
@@ -154,8 +223,56 @@ class LearningTaskService {
     return response.data
   }
 
+  async submitTask(taskId: string, submissionData: Record<string, unknown> = {}): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/submit`, { submissionData })
+    return response.data
+  }
+
+  async startGroupTask(taskId: string): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/group/start`)
+    return response.data
+  }
+
+  async submitGroupTask(taskId: string, submissionData: Record<string, unknown> = {}): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/group/submit`, { submissionData })
+    return response.data
+  }
+
+  async selfConfirmTask(taskId: string): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/self-confirm`)
+    return response.data
+  }
+
+  async mockEvaluateTask(taskId: string, passed = true): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/mock-evaluate`, { passed })
+    return response.data
+  }
+
   async failTask(taskId: string): Promise<LearningPath> {
     const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/fail`)
+    return response.data
+  }
+
+  async assessTaskManually(courseId: string | number, runId: string, taskId: string, studentId: string | number, input: { points?: number | null; maxPoints?: number | null; passed?: boolean; feedback?: string | null }): Promise<TaskAssessment> {
+    const response = await apiClient.post<TaskAssessment>(`/courses/${courseId}/runs/${runId}/tasks/${taskId}/assessments/${studentId}/manual`, input)
+    return response.data
+  }
+
+  async assessGroupTaskManually(courseId: string | number, runId: string, taskId: string, groupId: string, input: { points?: number | null; maxPoints?: number | null; passed?: boolean; feedback?: string | null }): Promise<TaskAssessment> {
+    const response = await apiClient.put<TaskAssessment>(`/courses/${courseId}/runs/${runId}/tasks/${taskId}/groups/${groupId}/manual-assessment`, input)
+    return response.data
+  }
+
+  async resetTaskAssessment(courseId: string | number, runId: string, taskId: string, studentId: string | number): Promise<TaskAssessment> {
+    const response = await apiClient.post<TaskAssessment>(`/courses/${courseId}/runs/${runId}/tasks/${taskId}/assessments/${studentId}/reset`)
+    return response.data
+  }
+
+  async listTaskAssessments(courseId: string | number, runId: string, taskId?: string): Promise<TaskAssessment[]> {
+    const path = taskId
+      ? `/courses/${courseId}/runs/${runId}/tasks/${taskId}/assessments`
+      : `/courses/${courseId}/runs/${runId}/assessments`
+    const response = await apiClient.get<TaskAssessment[]>(path)
     return response.data
   }
 
@@ -171,7 +288,43 @@ export const formatTaskStatus = (status: TaskProgressStatus): string => {
     [TaskProgressStatus.COMPLETED]: 'Erfolgreich abgeschlossen',
     [TaskProgressStatus.FAILED]: 'Nicht erfolgreich abgeschlossen',
     [TaskProgressStatus.IN_PROGRESS]: 'Begonnen',
+    [TaskProgressStatus.SUBMITTED]: 'Wartet auf Bewertung',
     [TaskProgressStatus.LOCKED]: 'Gesperrt'
+  }
+
+  return labels[status] ?? status
+}
+
+export const formatGradingMode = (mode: TaskGradingMode): string => {
+  const labels: Record<TaskGradingMode, string> = {
+    [TaskGradingMode.AUTOMATIC_MOCK]: 'Automatisch bewertet (Mock)',
+    [TaskGradingMode.MANUAL]: 'Manuelle Bewertung',
+    [TaskGradingMode.NOT_GRADED]: 'Keine Bewertung',
+    [TaskGradingMode.SELF_CONFIRMATION]: 'Selbstbestätigung'
+  }
+
+  return labels[mode] ?? mode
+}
+
+export const formatTaskWorkMode = (mode?: TaskWorkMode): string => {
+  const labels: Record<TaskWorkMode, string> = {
+    [TaskWorkMode.INDIVIDUAL]: 'Einzelaufgabe',
+    [TaskWorkMode.GROUP]: 'Gruppenaufgabe'
+  }
+
+  return labels[mode ?? TaskWorkMode.INDIVIDUAL] ?? 'Einzelaufgabe'
+}
+
+export const formatAssessmentStatus = (status?: TaskAssessmentStatus): string => {
+  if (!status) return 'Noch nicht bewertet'
+
+  const labels: Record<TaskAssessmentStatus, string> = {
+    [TaskAssessmentStatus.AUTO_EVALUATED]: 'Automatisch bewertet',
+    [TaskAssessmentStatus.FAILED]: 'Nicht bestanden',
+    [TaskAssessmentStatus.NOT_SUBMITTED]: 'Nicht abgegeben',
+    [TaskAssessmentStatus.PASSED]: 'Bestanden',
+    [TaskAssessmentStatus.PENDING_REVIEW]: 'Wartet auf Bewertung',
+    [TaskAssessmentStatus.SUBMITTED]: 'Abgegeben'
   }
 
   return labels[status] ?? status

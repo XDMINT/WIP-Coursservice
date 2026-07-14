@@ -23,6 +23,7 @@ export enum TaskProgressStatus {
   LOCKED = 'LOCKED',
   AVAILABLE = 'AVAILABLE',
   IN_PROGRESS = 'IN_PROGRESS',
+  SUBMITTED = 'SUBMITTED',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
 }

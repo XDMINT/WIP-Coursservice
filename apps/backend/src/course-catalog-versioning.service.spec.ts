@@ -521,6 +521,7 @@ const createFixture = () => {
   const courseResultRepository = createRepository<CourseResult>(results, 'result');
   const enrollmentRepository = createRepository<Enrollment>(enrollments, 'enrollment');
   const taskRepository = createRepository<Task>(tasks, 'task');
+  const taskAssessmentRepository = createRepository([], 'assessment');
   const taskProgressRepository = createRepository<TaskProgress>([], 'progress');
   const service = new CoursesService(
     courseRepository as any,
@@ -532,6 +533,7 @@ const createFixture = () => {
     courseResultRepository as any,
     enrollmentRepository as any,
     taskRepository as any,
+    taskAssessmentRepository as any,
     taskProgressRepository as any,
     emptyRepository() as any,
     emptyRepository() as any,
@@ -555,6 +557,7 @@ const createFixture = () => {
     materialRepository,
     service,
     taskRepository,
+    taskAssessmentRepository,
     taskProgressRepository,
   };
 };

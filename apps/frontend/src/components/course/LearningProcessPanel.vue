@@ -28,12 +28,22 @@
         </div>
 
         <div v-if="canEdit && showCreateForm" class="task-form">
-          <v-text-field v-model="newTask.title" label="Titel" density="compact" />
-          <v-text-field v-model="newTask.description" label="Beschreibung" density="compact" />
-          <div class="task-form__grid">
+          <div class="task-form__main">
+            <v-text-field v-model="newTask.title" label="Titel" density="compact" />
+            <v-text-field v-model="newTask.description" label="Beschreibung" density="compact" />
             <v-text-field v-model.number="newTask.order" label="Reihenfolge" type="number" density="compact" />
-            <v-select v-model="newTask.unlockMode" :items="unlockModeOptions" label="Freischaltmodus" density="compact" />
+          </div>
+          <div class="task-form__grid">
+            <v-select v-model="newTask.unlockMode" :items="unlockModeOptions" item-title="title" item-value="value" label="Freischaltmodus" density="compact" />
             <v-select v-model="newTask.prerequisiteTaskId" :items="createPrerequisiteOptions" item-title="title" item-value="id" label="Voraussetzung" density="compact" clearable :disabled="newTask.unlockMode === TaskUnlockMode.IMMEDIATE" />
+            <v-select v-model="newTask.workMode" :items="workModeOptions" item-title="title" item-value="value" label="Bearbeitung" density="compact" />
+            <v-select v-model="newTask.gradingMode" :items="gradingModeOptions" item-title="title" item-value="value" label="Bewertungsmodus" density="compact" />
+            <v-text-field v-model.number="newTask.maxPoints" label="Max. Punkte" type="number" density="compact" :disabled="!requiresPoints(newTask.gradingMode)" />
+            <v-text-field v-model.number="newTask.passThreshold" label="Bestehensgrenze %" type="number" density="compact" :disabled="!requiresPoints(newTask.gradingMode)" />
+          </div>
+          <div class="task-form__toggles">
+            <v-switch v-model="newTask.feedbackRequired" label="Feedback erforderlich" color="primary" hide-details />
+            <v-switch v-model="newTask.allowRetries" label="Wiederholen erlaubt" color="primary" hide-details />
           </div>
           <v-alert v-if="newTaskValidationMessage" class="mb-3" type="warning" variant="tonal" density="compact">
             {{ newTaskValidationMessage }}
@@ -47,21 +57,73 @@
         <v-empty-state v-if="tasks.length === 0" icon="mdi-clipboard-text-outline" title="Keine Aufgaben vorhanden" text="Für diesen Kurs wurden noch keine Aufgaben angelegt." />
 
         <div v-else class="teacher-task-list">
-          <div v-for="task in sortedTasks" :key="task.id" class="teacher-task-row" data-testid="teacher-task-row">
-            <v-text-field v-model.number="task.order" label="Reihenfolge" type="number" density="compact" hide-details :disabled="!canEdit" />
-            <v-text-field v-model="task.title" label="Titel" density="compact" hide-details :disabled="!canEdit" />
-            <v-text-field v-model="task.description" label="Beschreibung" density="compact" hide-details :disabled="!canEdit" />
-            <v-select v-model="task.unlockMode" :items="unlockModeOptions" label="Freischaltmodus" density="compact" hide-details :disabled="!canEdit" />
-            <v-select v-model="task.prerequisiteTaskId" :items="getPrerequisiteOptions(task)" item-title="title" item-value="id" label="Voraussetzung" density="compact" hide-details clearable :disabled="!canEdit || task.unlockMode === TaskUnlockMode.IMMEDIATE" />
-            <v-switch v-model="task.isPublished" label="Freigegeben" color="primary" hide-details :disabled="!canEdit" />
-            <div v-if="canEdit" class="row-actions">
-              <v-btn size="small" color="primary" :disabled="Boolean(getTaskValidationMessage(task))" @click="saveTask(task)"> Speichern </v-btn>
-              <v-btn size="small" variant="text" color="error" @click="requestDeleteTask(task)"> Löschen </v-btn>
+          <article v-for="task in sortedTasks" :key="task.id" class="teacher-task-card" :class="{ 'teacher-task-card--draft': !task.isPublished }" data-testid="teacher-task-row">
+            <header class="teacher-task-card__header">
+              <div class="teacher-task-card__heading">
+                <v-text-field v-model.number="task.order" class="teacher-task-card__order" label="Nr." type="number" density="compact" hide-details :disabled="!canEdit" />
+                <div class="teacher-task-card__summary">
+                  <strong>{{ task.order }}. {{ task.title || 'Unbenannte Aufgabe' }}</strong>
+                  <div class="teacher-task-card__chips">
+                    <v-chip size="small" variant="tonal" label>{{ formatUnlockMode(task.unlockMode) }}</v-chip>
+                    <v-chip size="small" variant="tonal" label>{{ formatTaskWorkMode(task.workMode) }}</v-chip>
+                    <v-chip size="small" variant="tonal" label>{{ formatGradingMode(task.gradingMode) }}</v-chip>
+                    <v-chip size="small" :color="task.isPublished ? 'primary' : undefined" variant="tonal" label>
+                      {{ task.isPublished ? 'Freigegeben' : 'Entwurf' }}
+                    </v-chip>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="canEdit" class="row-actions teacher-task-card__actions">
+                <v-btn size="small" color="primary" variant="flat" :disabled="Boolean(getTaskValidationMessage(task))" @click="saveTask(task)">
+                  <v-icon start>mdi-content-save-outline</v-icon>
+                  Speichern
+                </v-btn>
+                <v-btn size="small" variant="text" color="error" @click="requestDeleteTask(task)">
+                  <v-icon start>mdi-delete-outline</v-icon>
+                  Löschen
+                </v-btn>
+              </div>
+            </header>
+
+            <div class="teacher-task-card__identity">
+              <v-text-field v-model="task.title" label="Titel" density="compact" hide-details :disabled="!canEdit" />
+              <v-textarea v-model="task.description" label="Beschreibung" density="compact" rows="2" auto-grow hide-details :disabled="!canEdit" />
             </div>
-            <v-alert v-if="getTaskValidationMessage(task)" class="teacher-task-row__message" type="warning" variant="tonal" density="compact">
+
+            <div class="teacher-task-card__body">
+              <section class="teacher-task-card__group">
+                <span class="teacher-task-card__group-title">Freischaltung</span>
+                <div class="teacher-task-card__release">
+                  <v-select v-model="task.unlockMode" :items="unlockModeOptions" item-title="title" item-value="value" label="Modus" density="compact" hide-details :disabled="!canEdit" />
+                  <v-select v-model="task.prerequisiteTaskId" :items="getPrerequisiteOptions(task)" item-title="title" item-value="id" label="Voraussetzung" density="compact" hide-details clearable :disabled="!canEdit || task.unlockMode === TaskUnlockMode.IMMEDIATE" />
+                </div>
+              </section>
+
+              <section class="teacher-task-card__group">
+                <span class="teacher-task-card__group-title">Bewertung</span>
+                <div class="teacher-task-card__assessment">
+                  <v-select v-model="task.workMode" :items="workModeOptions" item-title="title" item-value="value" label="Bearbeitung" density="compact" hide-details :disabled="!canEdit" />
+                  <v-select v-model="task.gradingMode" :items="gradingModeOptions" item-title="title" item-value="value" label="Modus" density="compact" hide-details :disabled="!canEdit" />
+                  <v-text-field v-model.number="task.maxPoints" label="Punkte" type="number" density="compact" hide-details :disabled="!canEdit || !requiresPoints(task.gradingMode)" />
+                  <v-text-field v-model.number="task.passThreshold" label="Grenze %" type="number" density="compact" hide-details :disabled="!canEdit || !requiresPoints(task.gradingMode)" />
+                </div>
+              </section>
+
+              <section class="teacher-task-card__group">
+                <span class="teacher-task-card__group-title">Optionen</span>
+                <div class="teacher-task-card__options">
+                  <v-switch v-model="task.feedbackRequired" label="Feedback" color="primary" hide-details :disabled="!canEdit" />
+                  <v-switch v-model="task.allowRetries" label="Wiederholen" color="primary" hide-details :disabled="!canEdit" />
+                  <v-switch v-model="task.isPublished" label="Freigegeben" color="primary" hide-details :disabled="!canEdit" />
+                </div>
+              </section>
+            </div>
+
+            <v-alert v-if="getTaskValidationMessage(task)" class="teacher-task-card__message" type="warning" variant="tonal" density="compact">
               {{ getTaskValidationMessage(task) }}
             </v-alert>
-          </div>
+          </article>
         </div>
       </section>
 
@@ -98,6 +160,8 @@
                   {{ getStatusPresentation(progress.status).label }}
                 </v-chip>
                 <v-btn v-if="canManuallyUnlock(progress.taskId, progress.status)" size="small" variant="outlined" @click="manualUnlock(progress.taskId, student.studentId)"> Freischalten </v-btn>
+                <v-btn v-if="canAssessManually(progress)" size="small" color="primary" variant="outlined" @click="openManualAssessment(progress, student.studentId)"> Bewerten </v-btn>
+                <v-btn v-if="canResetManualAssessment(progress)" size="small" color="warning" variant="outlined" @click="resetManualAssessment(progress, student.studentId)"> Bewertung zurücksetzen </v-btn>
               </div>
             </div>
           </div>
@@ -130,6 +194,19 @@
             </div>
             <h3>{{ task.title }}</h3>
             <p>{{ task.description }}</p>
+            <div class="student-task__assessment">
+              <span>{{ formatTaskWorkMode(task.workMode) }}<template v-if="task.workMode === TaskWorkMode.GROUP && task.group?.name"> · {{ task.group.name }}</template></span>
+              <span>Bewertung: {{ formatGradingMode(task.gradingMode) }}</span>
+              <span>{{ formatAssessmentStatus(task.assessment?.status) }}</span>
+              <span v-if="task.assessment?.points !== undefined && task.assessment?.points !== null">
+                {{ task.assessment.points }} / {{ task.assessment.maxPoints ?? task.maxPoints ?? '-' }} Punkte
+              </span>
+              <span v-if="task.assessment?.passed === true">Bestanden</span>
+              <span v-if="task.assessment?.passed === false">Nicht bestanden</span>
+            </div>
+            <v-alert v-if="task.assessment?.feedback" type="info" variant="tonal" density="compact">
+              {{ task.assessment.feedback }}
+            </v-alert>
             <v-alert v-if="task.lockedReason" type="info" variant="tonal" density="compact">
               {{ task.lockedReason }}
             </v-alert>
@@ -139,9 +216,10 @@
               <span v-if="task.completedAt">Abgeschlossen am {{ formatDate(task.completedAt) }}</span>
             </div>
             <div class="student-task__actions">
-              <v-btn v-if="canStartTask(task)" color="primary" variant="outlined" @click="startTask(task)"> Aufgabe beginnen </v-btn>
-              <v-btn v-if="canCompleteTask(task)" color="primary" @click="requestTaskResult(task, 'complete')"> Erfolgreich abschließen </v-btn>
-              <v-btn v-if="canFailTask(task)" color="error" variant="outlined" @click="requestTaskResult(task, 'fail')"> Nicht erfolgreich abschließen </v-btn>
+              <v-btn v-if="canStartTask(task)" color="primary" variant="outlined" @click="startTask(task)"> {{ task.workMode === TaskWorkMode.GROUP ? 'Gruppenaufgabe beginnen' : 'Aufgabe beginnen' }} </v-btn>
+              <v-btn v-if="canCompleteTask(task)" color="primary" @click="requestSelfConfirmation(task)"> Als erledigt markieren </v-btn>
+              <v-btn v-if="canSubmitTask(task)" color="primary" @click="submitTask(task)"> {{ task.workMode === TaskWorkMode.GROUP ? 'Gruppenaufgabe abgeben' : 'Aufgabe abgeben' }} </v-btn>
+              <v-btn v-if="canMockEvaluateTask(task)" color="primary" @click="mockEvaluateTask(task, true)"> Abgabe simulieren </v-btn>
             </div>
           </article>
         </div>
@@ -158,12 +236,30 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog v-model="manualAssessment.open" max-width="520">
+      <v-card class="confirmation-dialog">
+        <v-card-title>Manuelle Bewertung</v-card-title>
+        <v-card-text>
+          <div class="assessment-dialog">
+            <p>{{ manualAssessment.title }}</p>
+            <v-select v-model="manualAssessment.passed" :items="manualAssessmentResultOptions" item-title="title" item-value="value" label="Ergebnis" density="compact" />
+            <v-text-field v-model.number="manualAssessment.points" label="Punkte" type="number" density="compact" />
+            <v-textarea v-model="manualAssessment.feedback" label="Feedback" density="compact" rows="3" />
+          </div>
+        </v-card-text>
+        <v-card-actions class="row-actions row-actions--end">
+          <v-btn variant="text" @click="closeManualAssessment"> Abbrechen </v-btn>
+          <v-btn color="primary" @click="submitManualAssessment"> Bewertung speichern </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import learningTaskService, { TaskProgressStatus, TaskUnlockMode, formatUnlockMode, type LearningPath, type LearningTask, type StudentLearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
+import learningTaskService, { TaskGradingMode, TaskProgressStatus, TaskUnlockMode, TaskWorkMode, formatAssessmentStatus, formatGradingMode, formatTaskWorkMode, formatUnlockMode, type LearningPath, type LearningTask, type LearningTaskProgress, type StudentLearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
 import { getApiErrorMessage } from '@/services/apiErrors'
 import { getTaskStatusPresentation } from '@/services/statusPresentation'
 
@@ -188,6 +284,12 @@ const newTask = reactive({
   description: '',
   order: 1,
   unlockMode: TaskUnlockMode.IMMEDIATE,
+  workMode: TaskWorkMode.INDIVIDUAL,
+  gradingMode: TaskGradingMode.NOT_GRADED,
+  maxPoints: null as number | null,
+  passThreshold: 50,
+  feedbackRequired: false,
+  allowRetries: true,
   prerequisiteTaskId: null as string | null
 })
 
@@ -203,7 +305,43 @@ const confirmation = reactive<{
   action: null
 })
 
-const unlockModeOptions = [TaskUnlockMode.IMMEDIATE, TaskUnlockMode.AUTOMATIC, TaskUnlockMode.MANUAL]
+const unlockModeOptions = [
+  { title: 'Sofort verfügbar', value: TaskUnlockMode.IMMEDIATE },
+  { title: 'Nach Voraussetzung', value: TaskUnlockMode.AUTOMATIC },
+  { title: 'Manuell freischalten', value: TaskUnlockMode.MANUAL }
+]
+const gradingModeOptions = [
+  { title: 'Keine Bewertung', value: TaskGradingMode.NOT_GRADED },
+  { title: 'Selbstbestätigung', value: TaskGradingMode.SELF_CONFIRMATION },
+  { title: 'Manuelle Bewertung', value: TaskGradingMode.MANUAL },
+  { title: 'Automatisch (Mock)', value: TaskGradingMode.AUTOMATIC_MOCK }
+]
+const workModeOptions = [
+  { title: 'Einzelaufgabe', value: TaskWorkMode.INDIVIDUAL },
+  { title: 'Gruppenaufgabe', value: TaskWorkMode.GROUP }
+]
+const manualAssessmentResultOptions = [
+  { title: 'Als bestanden bewerten', value: true },
+  { title: 'Als nicht bestanden bewerten', value: false }
+]
+
+const manualAssessment = reactive<{
+  open: boolean
+  taskId: string
+  studentId: string
+  title: string
+  passed: boolean
+  points: number | null
+  feedback: string
+}>({
+  open: false,
+  taskId: '',
+  studentId: '',
+  title: '',
+  passed: true,
+  points: null,
+  feedback: ''
+})
 
 const sortedTasks = computed(() => [...tasks.value].sort((a, b) => a.order - b.order))
 const studentTasks = computed(() => learningPath.value?.tasks ?? [])
@@ -229,6 +367,10 @@ const newTaskValidationMessage = computed(() => {
 
   if (newTask.unlockMode === TaskUnlockMode.AUTOMATIC && !newTask.prerequisiteTaskId) {
     return 'Automatische Freischaltung benötigt eine Voraussetzung.'
+  }
+
+  if (requiresPoints(newTask.gradingMode) && (!newTask.maxPoints || newTask.maxPoints <= 0)) {
+    return 'Bewertete Aufgaben benötigen eine maximale Punktzahl.'
   }
 
   return ''
@@ -283,9 +425,18 @@ const resetNewTask = () => {
   newTask.description = ''
   newTask.order = sortedTasks.value.length + 1
   newTask.unlockMode = TaskUnlockMode.IMMEDIATE
+  newTask.workMode = TaskWorkMode.INDIVIDUAL
+  newTask.gradingMode = TaskGradingMode.NOT_GRADED
+  newTask.maxPoints = null
+  newTask.passThreshold = 50
+  newTask.feedbackRequired = false
+  newTask.allowRetries = true
   newTask.prerequisiteTaskId = null
   showCreateForm.value = false
 }
+
+const requiresPoints = (gradingMode: TaskGradingMode) =>
+  gradingMode === TaskGradingMode.MANUAL || gradingMode === TaskGradingMode.AUTOMATIC_MOCK
 
 const submitNewTask = async () => {
   if (!canEdit.value) {
@@ -306,6 +457,12 @@ const submitNewTask = async () => {
       type: 'DEMO_TASK',
       unlockMode: newTask.unlockMode,
       prerequisiteTaskId: newTask.unlockMode === TaskUnlockMode.IMMEDIATE ? null : newTask.prerequisiteTaskId,
+      workMode: newTask.workMode,
+      gradingMode: newTask.gradingMode,
+      maxPoints: requiresPoints(newTask.gradingMode) ? newTask.maxPoints : null,
+      passThreshold: requiresPoints(newTask.gradingMode) ? newTask.passThreshold : null,
+      feedbackRequired: newTask.feedbackRequired,
+      allowRetries: newTask.allowRetries,
       isPublished: true
     })
     successMessage.value = 'Aufgabe angelegt.'
@@ -359,6 +516,10 @@ const getTaskValidationMessage = (task: LearningTask): string => {
     return 'Automatische Freischaltung benötigt eine Voraussetzung.'
   }
 
+  if (requiresPoints(task.gradingMode) && (!task.maxPoints || task.maxPoints <= 0)) {
+    return 'Bewertete Aufgaben benötigen eine maximale Punktzahl.'
+  }
+
   if (task.prerequisiteTaskId === task.id) {
     return 'Eine Aufgabe darf nicht von sich selbst abhängen.'
   }
@@ -391,6 +552,12 @@ const saveTask = async (task: LearningTask) => {
       type: task.type,
       unlockMode: task.unlockMode,
       prerequisiteTaskId: task.unlockMode === TaskUnlockMode.IMMEDIATE ? null : (task.prerequisiteTaskId ?? null),
+      workMode: task.workMode,
+      gradingMode: task.gradingMode,
+      maxPoints: requiresPoints(task.gradingMode) ? task.maxPoints ?? null : null,
+      passThreshold: requiresPoints(task.gradingMode) ? task.passThreshold ?? 50 : null,
+      feedbackRequired: task.feedbackRequired,
+      allowRetries: task.allowRetries,
       isPublished: task.isPublished
     })
     successMessage.value = 'Aufgabe gespeichert.'
@@ -410,27 +577,67 @@ const requestDeleteTask = (task: LearningTask) => {
   })
 }
 
-const canStartTask = (task: StudentLearningTask) => task.status === TaskProgressStatus.AVAILABLE || task.status === TaskProgressStatus.FAILED
-const canCompleteTask = (task: StudentLearningTask) => task.status === TaskProgressStatus.IN_PROGRESS
-const canFailTask = (task: StudentLearningTask) => task.status === TaskProgressStatus.IN_PROGRESS
+const canStartTask = (task: StudentLearningTask) => task.status === TaskProgressStatus.AVAILABLE || (task.status === TaskProgressStatus.FAILED && task.allowRetries)
+const canCompleteTask = (task: StudentLearningTask) =>
+  task.status === TaskProgressStatus.IN_PROGRESS &&
+  task.workMode !== TaskWorkMode.GROUP &&
+  (task.gradingMode === TaskGradingMode.NOT_GRADED || task.gradingMode === TaskGradingMode.SELF_CONFIRMATION)
+const canSubmitTask = (task: StudentLearningTask) => task.status === TaskProgressStatus.IN_PROGRESS && task.gradingMode === TaskGradingMode.MANUAL
+const canMockEvaluateTask = (task: StudentLearningTask) => task.status === TaskProgressStatus.IN_PROGRESS && task.workMode !== TaskWorkMode.GROUP && task.gradingMode === TaskGradingMode.AUTOMATIC_MOCK
 
 const startTask = async (task: StudentLearningTask) => {
   try {
-    learningPath.value = await learningTaskService.startTask(task.id)
-    successMessage.value = 'Aufgabe begonnen.'
+    learningPath.value = task.workMode === TaskWorkMode.GROUP
+      ? await learningTaskService.startGroupTask(task.id)
+      : await learningTaskService.startTask(task.id)
+    successMessage.value = task.workMode === TaskWorkMode.GROUP ? 'Gruppenaufgabe begonnen.' : 'Aufgabe begonnen.'
   } catch (error) {
     errorMessage.value = getApiErrorMessage(error)
   }
 }
 
-const requestTaskResult = (task: StudentLearningTask, result: 'complete' | 'fail') => {
-  openConfirmation(result === 'complete' ? 'Aufgabe erfolgreich abschließen' : 'Aufgabe nicht erfolgreich abschließen', `Soll "${task.title}" wirklich als ${result === 'complete' ? 'erfolgreich' : 'nicht erfolgreich'} abgeschlossen werden?`, async () => {
-    learningPath.value = result === 'complete' ? await learningTaskService.completeTask(task.id) : await learningTaskService.failTask(task.id)
-    successMessage.value = result === 'complete' ? 'Aufgabe erfolgreich abgeschlossen.' : 'Aufgabe als nicht erfolgreich abgeschlossen.'
+const requestSelfConfirmation = (task: StudentLearningTask) => {
+  openConfirmation('Bearbeitung bestätigen', `Soll "${task.title}" als erledigt markiert werden?`, async () => {
+    learningPath.value = await learningTaskService.selfConfirmTask(task.id)
+    successMessage.value = 'Aufgabe als erledigt markiert.'
   })
 }
 
-const canManuallyUnlock = (taskId: string, status: TaskProgressStatus) => canEdit.value && status === TaskProgressStatus.LOCKED && tasks.value.find((task) => task.id === taskId)?.unlockMode === TaskUnlockMode.MANUAL
+const submitTask = async (task: StudentLearningTask) => {
+  try {
+    learningPath.value = task.workMode === TaskWorkMode.GROUP
+      ? await learningTaskService.submitGroupTask(task.id)
+      : await learningTaskService.submitTask(task.id)
+    successMessage.value = task.workMode === TaskWorkMode.GROUP ? 'Gruppenaufgabe abgegeben. Sie wartet jetzt auf Bewertung.' : 'Aufgabe abgegeben. Sie wartet jetzt auf Bewertung.'
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(error)
+  }
+}
+
+const mockEvaluateTask = async (task: StudentLearningTask, passed: boolean) => {
+  try {
+    learningPath.value = await learningTaskService.mockEvaluateTask(task.id, passed)
+    successMessage.value = 'Demo-Abgabe wurde automatisch bewertet.'
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(error)
+  }
+}
+
+const canManuallyUnlock = (taskId: string, status: TaskProgressStatus) => {
+  const task = tasks.value.find((candidate) => candidate.id === taskId)
+
+  return canEdit.value && status === TaskProgressStatus.LOCKED && task?.unlockMode === TaskUnlockMode.MANUAL && task.workMode !== TaskWorkMode.GROUP
+}
+const canAssessManually = (progress: LearningTaskProgress) =>
+  canEdit.value &&
+  getTaskById(progress.taskId)?.gradingMode === TaskGradingMode.MANUAL &&
+  getTaskById(progress.taskId)?.workMode !== TaskWorkMode.GROUP &&
+  [TaskProgressStatus.SUBMITTED, TaskProgressStatus.COMPLETED, TaskProgressStatus.FAILED].includes(progress.status)
+const canResetManualAssessment = (progress: LearningTaskProgress) =>
+  canEdit.value &&
+  getTaskById(progress.taskId)?.gradingMode === TaskGradingMode.MANUAL &&
+  getTaskById(progress.taskId)?.workMode !== TaskWorkMode.GROUP &&
+  (progress.assessment?.passed === true || progress.assessment?.passed === false)
 
 const upsertProgressOverview = (updatedOverview: StudentProgressOverview) => {
   const existingIndex = progressOverview.value.findIndex((student) => student.studentId === updatedOverview.studentId)
@@ -453,6 +660,70 @@ const manualUnlock = async (taskId: string, studentId: string) => {
     const updatedOverview = await learningTaskService.manuallyUnlockTask(taskId, studentId)
     upsertProgressOverview(updatedOverview)
     successMessage.value = 'Aufgabe freigeschaltet.'
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(error)
+  }
+}
+
+const openManualAssessment = (progress: LearningTaskProgress, studentId: string) => {
+  const task = getTaskById(progress.taskId)
+
+  if (!task) return
+
+  manualAssessment.open = true
+  manualAssessment.taskId = task.id
+  manualAssessment.studentId = studentId
+  manualAssessment.title = `${progress.order}. ${progress.title}`
+  manualAssessment.passed = progress.assessment?.passed ?? true
+  manualAssessment.points = progress.assessment?.points ?? (progress.assessment?.passed === false ? 0 : task.maxPoints ?? null)
+  manualAssessment.feedback = progress.assessment?.feedback ?? ''
+}
+
+const closeManualAssessment = () => {
+  manualAssessment.open = false
+  manualAssessment.taskId = ''
+  manualAssessment.studentId = ''
+  manualAssessment.title = ''
+  manualAssessment.passed = true
+  manualAssessment.points = null
+  manualAssessment.feedback = ''
+}
+
+const submitManualAssessment = async () => {
+  if (!canEdit.value || !props.courseRunId) {
+    errorMessage.value = 'Bewertungen sind nur im ausgewählten Durchlauf möglich.'
+    return
+  }
+
+  const task = getTaskById(manualAssessment.taskId)
+
+  if (!task) return
+
+  try {
+    await learningTaskService.assessTaskManually(props.courseId, props.courseRunId, task.id, manualAssessment.studentId, {
+      maxPoints: task.maxPoints ?? null,
+      points: manualAssessment.points,
+      passed: manualAssessment.passed,
+      feedback: manualAssessment.feedback.trim() || null
+    })
+    successMessage.value = manualAssessment.passed ? 'Aufgabe als bestanden bewertet.' : 'Aufgabe als nicht bestanden bewertet.'
+    closeManualAssessment()
+    await loadTeacherData()
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(error)
+  }
+}
+
+const resetManualAssessment = async (progress: LearningTaskProgress, studentId: string) => {
+  if (!canEdit.value || !props.courseRunId) {
+    errorMessage.value = 'Bewertungen sind nur im ausgewählten Durchlauf möglich.'
+    return
+  }
+
+  try {
+    await learningTaskService.resetTaskAssessment(props.courseId, props.courseRunId, progress.taskId, studentId)
+    successMessage.value = 'Bewertung zurückgesetzt.'
+    await loadTeacherData()
   } catch (error) {
     errorMessage.value = getApiErrorMessage(error)
   }
@@ -536,7 +807,7 @@ const formatDate = (value: string) =>
 
 .student-task,
 .student-progress-row,
-.teacher-task-row,
+.teacher-task-card,
 .task-form {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-outline), 0.28);
@@ -607,20 +878,152 @@ const formatDate = (value: string) =>
   font-size: 0.9rem;
 }
 
+.student-task__assessment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 0.9rem;
+}
+
+.task-form {
+  display: grid;
+  gap: 12px;
+}
+
+.task-form__main,
 .task-form__grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(120px, 160px) minmax(180px, 1fr) minmax(180px, 1fr);
 }
 
-.teacher-task-row {
+.task-form__main {
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.6fr) 140px;
+}
+
+.task-form__grid {
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1fr) 130px 150px;
+}
+
+.task-form__toggles {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.teacher-task-card {
+  display: grid;
+  gap: 14px;
+}
+
+.teacher-task-card--draft {
+  border-style: dashed;
+}
+
+.teacher-task-card__header {
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(var(--v-theme-outline), 0.16);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding-bottom: 12px;
+}
+
+.teacher-task-card__heading {
+  align-items: center;
   display: grid;
   gap: 12px;
-  grid-template-columns: 110px minmax(160px, 1fr) minmax(180px, 1.4fr) 170px minmax(180px, 1fr) 150px auto;
+  grid-template-columns: 72px minmax(0, 1fr);
+  min-width: 0;
 }
 
-.teacher-task-row__message {
-  grid-column: 1 / -1;
+.teacher-task-card__summary {
+  min-width: 0;
+
+  strong {
+    display: block;
+    font-size: 1rem;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+}
+
+.teacher-task-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.teacher-task-card__actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.teacher-task-card__identity {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(300px, 1.25fr);
+}
+
+.teacher-task-card__body {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(300px, 1fr) minmax(380px, 1.2fr) minmax(210px, 0.7fr);
+}
+
+.teacher-task-card__group {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.teacher-task-card__group-title {
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.teacher-task-card__release {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(140px, 0.9fr) minmax(160px, 1.1fr);
+}
+
+.teacher-task-card__assessment {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(180px, 1fr) 104px 116px;
+}
+
+.teacher-task-card__options {
+  background: rgba(var(--v-theme-surface-variant), 0.34);
+  border: 1px solid rgba(var(--v-theme-outline), 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+}
+
+.teacher-task-card__options :deep(.v-selection-control) {
+  min-height: 34px;
+}
+
+.teacher-task-card__options :deep(.v-label) {
+  font-size: 0.9rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.teacher-task-card__order :deep(input) {
+  text-align: center;
+}
+
+.teacher-task-card__message {
+  margin-top: 2px;
 }
 
 .student-progress-row {
@@ -654,7 +1057,7 @@ const formatDate = (value: string) =>
   align-items: center;
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(180px, 1fr) max-content max-content;
+  grid-template-columns: minmax(180px, 1fr) max-content max-content max-content max-content;
 }
 
 .confirmation-dialog {
@@ -668,6 +1071,11 @@ const formatDate = (value: string) =>
   p {
     margin: 0 0 16px;
   }
+}
+
+.assessment-dialog {
+  display: grid;
+  gap: 12px;
 }
 
 .row-actions--end {
@@ -686,10 +1094,23 @@ const formatDate = (value: string) =>
     width: 100%;
   }
 
+  .task-form__main,
   .task-form__grid,
-  .teacher-task-row,
+  .teacher-task-card__identity,
+  .teacher-task-card__body,
+  .teacher-task-card__release,
+  .teacher-task-card__assessment,
   .teacher-progress-task {
     grid-template-columns: 1fr;
+  }
+
+  .teacher-task-card__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .teacher-task-card__actions {
+    justify-content: flex-start;
   }
 }
 </style>

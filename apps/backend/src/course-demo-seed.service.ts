@@ -1,4 +1,4 @@
-import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,12 +17,16 @@ import {
   LearningMaterialReleaseMode,
   LearningMaterialType,
 } from './entities/learning-material.entity';
-import { Task, TaskUnlockMode } from './entities/task.entity';
+import { CourseGroup } from './entities/course-group.entity';
+import { GroupMembership, MembershipRole } from './entities/group-membership.entity';
+import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from './entities/task.entity';
 
 const DEMO_COURSE_EXTERNAL_ID = 'demo-learning-process';
 const DEMO_ENROLLABLE_COURSE_EXTERNAL_ID = 'demo-enrollable-course';
 const DEMO_TEACHER_ID = '1';
 const DEMO_STUDENT_ID = '3';
+const DEMO_GROUP_STUDENT_ID = '4';
+const DEMO_UNGROUPED_STUDENT_ID = '5';
 const DEMO_SEED_USER = 'demo-seed';
 const DEMO_ACTIVE_SEMESTER_RUN_LABEL = 'Wintersemester 2026/27';
 const DEMO_PREVIOUS_SEMESTER_RUN_LABEL = 'Sommersemester 2026';
@@ -33,6 +37,10 @@ type DemoTaskSeed = {
   description: string;
   order: number;
   unlockMode: TaskUnlockMode;
+  gradingMode: TaskGradingMode;
+  workMode?: TaskWorkMode;
+  maxPoints?: number;
+  passThreshold?: number;
   prerequisiteDemoKey?: string;
 };
 
@@ -63,21 +71,29 @@ const demoTaskSeeds: DemoTaskSeed[] = [
     description: 'Ein kurzer einführender Lernschritt für den Demo-Ablauf.',
     order: 1,
     unlockMode: TaskUnlockMode.IMMEDIATE,
+    gradingMode: TaskGradingMode.SELF_CONFIRMATION,
   },
   {
     demoKey: 'learning-process-apply-basics',
     title: 'Grundlagen anwenden',
-    description: 'Ein auf Aufgabe 1 aufbauender Lernschritt mit automatischer Freischaltung.',
+    description: 'Eine manuell bewertete Demo-Aufgabe mit Abgabe und Lehrendenfeedback.',
     order: 2,
     unlockMode: TaskUnlockMode.AUTOMATIC,
+    gradingMode: TaskGradingMode.MANUAL,
+    workMode: TaskWorkMode.GROUP,
+    maxPoints: 10,
+    passThreshold: 50,
     prerequisiteDemoKey: 'learning-process-basics',
   },
   {
     demoKey: 'learning-process-final-task',
-    title: 'Abschlussaufgabe bearbeiten',
-    description: 'Ein abschließender Lernschritt, der durch eine Lehrperson manuell freigeschaltet wird.',
+    title: 'Automatische Demo-Bewertung auslösen',
+    description: 'Eine automatisch bewertete Demo-Aufgabe, die im Mini-Projekt durch einen Mock bewertet wird.',
     order: 3,
-    unlockMode: TaskUnlockMode.MANUAL,
+    unlockMode: TaskUnlockMode.AUTOMATIC,
+    gradingMode: TaskGradingMode.AUTOMATIC_MOCK,
+    maxPoints: 10,
+    passThreshold: 50,
     prerequisiteDemoKey: 'learning-process-apply-basics',
   },
 ];
@@ -87,6 +103,8 @@ const parseBoolean = (value?: string): boolean =>
 
 @Injectable()
 export class CourseDemoSeedService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(CourseDemoSeedService.name);
+
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Course)
@@ -101,14 +119,50 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
     private readonly taskRepository: Repository<Task>,
     @InjectRepository(CourseVersion)
     private readonly courseVersionRepository: Repository<CourseVersion>,
+    @InjectRepository(CourseGroup)
+    private readonly courseGroupRepository: Repository<CourseGroup>,
+    @InjectRepository(GroupMembership)
+    private readonly groupMembershipRepository: Repository<GroupMembership>,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
     if (!this.shouldSeedDemoData()) {
+      this.logger.log(
+        JSON.stringify({
+          level: 'info',
+          event: 'demo_seed_skipped',
+          reason: 'disabled_or_non_demo_environment',
+        }),
+      );
       return;
     }
 
-    await this.seedLearningProcessDemo();
+    this.logger.log(
+      JSON.stringify({
+        level: 'info',
+        event: 'demo_seed_started',
+      }),
+    );
+
+    try {
+      await this.seedLearningProcessDemo();
+      this.logger.log(
+        JSON.stringify({
+          level: 'info',
+          event: 'demo_seed_completed',
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'demo_seed_failed',
+          message: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined,
+        }),
+      );
+      throw error;
+    }
   }
 
   private shouldSeedDemoData(): boolean {
@@ -177,6 +231,18 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
       CourseMemberRole.STUDENT,
     );
     await this.upsertDemoEnrollment(
+      course,
+      activeLearningRun,
+      DEMO_GROUP_STUDENT_ID,
+      CourseMemberRole.STUDENT,
+    );
+    await this.upsertDemoEnrollment(
+      course,
+      activeLearningRun,
+      DEMO_UNGROUPED_STUDENT_ID,
+      CourseMemberRole.STUDENT,
+    );
+    await this.upsertDemoEnrollment(
       enrollableCourse,
       activeEnrollableRun,
       DEMO_TEACHER_ID,
@@ -202,6 +268,7 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
       ]);
     }
     await this.upsertDemoTasks(course, activeLearningRun);
+    await this.upsertDemoGroups(course, activeLearningRun);
     await this.upsertDemoMaterials(course, activeLearningRun, [
       {
         title: 'Material C',
@@ -479,10 +546,7 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
       const existingVersion = existingVersionsByNumber.get(seed.versionNumber);
 
       if (existingVersion) {
-        if (
-          existingVersion.created_by === DEMO_SEED_USER &&
-          !this.hasVersionedSnapshot(existingVersion.content)
-        ) {
+        if (existingVersion.created_by === DEMO_SEED_USER) {
           existingVersion.content = await this.buildDemoVersionContent(
             course,
             courseRun,
@@ -600,18 +664,16 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
           unlockMode: task.unlockMode,
           prerequisiteTaskId: task.prerequisiteTaskId,
           completionCriteria: task.completionCriteria ?? {},
+          gradingMode: task.gradingMode ?? TaskGradingMode.NOT_GRADED,
+          workMode: task.workMode ?? TaskWorkMode.INDIVIDUAL,
+          maxPoints: task.maxPoints ?? null,
+          passThreshold: task.passThreshold ?? null,
+          feedbackRequired: task.feedbackRequired === true,
+          allowRetries: task.allowRetries === true,
           isPublished: task.isPublished,
           demoKey: task.demoKey,
         })),
     };
-  }
-
-  private hasVersionedSnapshot(content?: Record<string, unknown>): boolean {
-    return Boolean(
-      content &&
-        Object.prototype.hasOwnProperty.call(content, 'learningMaterials') &&
-        Object.prototype.hasOwnProperty.call(content, 'tasks'),
-    );
   }
 
   private async upsertDemoTasks(
@@ -638,25 +700,23 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
           },
         });
 
-        if (legacyTask) {
+        if (legacyTask && !legacyTask.courseRunId) {
           legacyTask.courseRunId = courseRun.id;
           legacyTask.courseRun = courseRun;
           task = await this.taskRepository.save(legacyTask);
         }
       }
 
-      if (task) {
-        tasksByDemoKey.set(seed.demoKey, task);
-        continue;
+      if (!task) {
+        task = new Task();
+        task.courseId = course.id;
+        task.course = course;
+        task.courseRunId = courseRun.id;
+        task.courseRun = courseRun;
+        task.demoKey = seed.demoKey;
+        task.createdBy = DEMO_SEED_USER;
       }
 
-      task = new Task();
-      task.courseId = course.id;
-      task.course = course;
-      task.courseRunId = courseRun.id;
-      task.courseRun = courseRun;
-      task.demoKey = seed.demoKey;
-      task.createdBy = DEMO_SEED_USER;
       task.title = seed.title;
       task.description = seed.description;
       task.type = 'DEMO_TASK';
@@ -667,13 +727,73 @@ export class CourseDemoSeedService implements OnApplicationBootstrap {
         : undefined;
       task.completionCriteria = {
         demo: true,
-        resultInterface: 'recordTaskResult(studentId, taskId, passed)',
+        assessmentInterface: seed.gradingMode,
       };
+      task.gradingMode = seed.gradingMode;
+      task.workMode = seed.workMode ?? TaskWorkMode.INDIVIDUAL;
+      task.maxPoints = seed.maxPoints ?? null;
+      task.passThreshold = seed.passThreshold ?? null;
+      task.feedbackRequired = seed.gradingMode === TaskGradingMode.MANUAL;
+      task.allowRetries = false;
       task.isPublished = true;
       task.updatedBy = DEMO_SEED_USER;
 
       const savedTask = await this.taskRepository.save(task);
       tasksByDemoKey.set(seed.demoKey, savedTask);
+    }
+  }
+
+  private async upsertDemoGroups(
+    course: Course,
+    courseRun: CourseRun,
+  ): Promise<void> {
+    let group = await this.courseGroupRepository.findOne({
+      where: {
+        course_id: course.id,
+        course_run_id: courseRun.id,
+        name: 'Gruppe A',
+      },
+      relations: ['memberships'],
+    });
+
+    if (!group) {
+      group = new CourseGroup();
+      group.course_id = course.id;
+      group.course = course;
+      group.course_run_id = courseRun.id;
+      group.courseRun = courseRun;
+      group.name = 'Gruppe A';
+      group.description = 'Demo-Gruppe fuer die gemeinsame manuelle Bewertung.';
+      group.group_type = 'WORKGROUP' as any;
+      group.is_active = true;
+      group.created_by = DEMO_SEED_USER;
+      group.updated_by = DEMO_SEED_USER;
+      group = await this.courseGroupRepository.save(group);
+      group.memberships = [];
+    }
+
+    for (const studentId of [DEMO_STUDENT_ID, DEMO_GROUP_STUDENT_ID]) {
+      const existingMembership = (group.memberships ?? []).find(
+        (membership) => membership.user_id === studentId,
+      ) ?? await this.groupMembershipRepository.findOne({
+        where: {
+          group_id: group.id,
+          user_id: studentId,
+        },
+      });
+
+      if (existingMembership) {
+        continue;
+      }
+
+      const membership = new GroupMembership();
+      membership.group_id = group.id;
+      membership.group = group;
+      membership.user_id = studentId;
+      membership.role = MembershipRole.MEMBER;
+      membership.joined_at = new Date();
+      membership.added_by = DEMO_SEED_USER;
+      await this.groupMembershipRepository.save(membership);
     }
   }
 

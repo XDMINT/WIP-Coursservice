@@ -7,7 +7,7 @@
  * 
  * @module CoursesService
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, ILike, MoreThanOrEqual, Not, IsNull, In } from 'typeorm';
 import { Readable } from 'stream';
@@ -26,7 +26,12 @@ import {
   CourseResultSource,
 } from './entities/course-result.entity';
 import { Enrollment, CourseMemberRole } from './entities/enrollment.entity';
-import { Task, TaskUnlockMode } from './entities/task.entity';
+import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from './entities/task.entity';
+import {
+  TaskAssessment,
+  TaskAssessmentStatus,
+  TaskAssessmentTargetType,
+} from './entities/task-assessment.entity';
 import {
   TaskProgress,
   TaskProgressStatus,
@@ -42,7 +47,8 @@ import {
 } from './entities/course-run.entity';
 import { CourseVersion, CourseVersionStatus } from './entities/course-version.entity';
 import { CourseGroup } from './entities/course-group.entity';
-import { GroupMembership } from './entities/group-membership.entity';
+import { GroupMembership, MembershipRole } from './entities/group-membership.entity';
+import { GroupTaskProgress } from './entities/group-task-progress.entity';
 import { CalendarEvent } from './entities/calendar-event.entity';
 import {
   ApiForbiddenError,
@@ -95,21 +101,50 @@ import {
   LearningTaskProgressDto,
   LearningTaskResponseDto,
   ManualUnlockLearningTaskDto,
+  ManualTaskAssessmentDto,
+  MockEvaluateLearningTaskDto,
   StudentLearningTaskResponseDto,
   StudentProgressOverviewDto,
+  SubmitLearningTaskDto,
+  TaskAssessmentResponseDto,
   UpdateLearningTaskDto,
   UpdateLearningTaskReleaseConfigDto,
   UpdateLearningTaskSortDto,
   mapLearningTaskToDto,
   mapLearningTaskWithProgressToDto,
+  mapTaskAssessmentToDto,
   mapTaskProgressToDto,
 } from './dto/learning-process.dto';
+import {
+  AddStudyGroupMemberDto,
+  CreateStudyGroupDto,
+  ManualGroupTaskAssessmentDto,
+  StudyGroupResponseDto,
+  UpdateStudyGroupDto,
+  mapGroupTaskProgressToDto,
+  mapStudyGroupToDto,
+} from './dto/study-group.dto';
 import {
   COURSE_PASSING_RULE_DESCRIPTION,
   COURSE_PASSING_THRESHOLD_PERCENT,
   calculateCoursePassStatus,
 } from './course-result.rules';
 import { LocalMaterialStorage } from './storage/material-storage';
+import {
+  TASK_PASS_THRESHOLD_PERCENT,
+  calculateTaskAssessmentPassed,
+} from './task-assessment.rules';
+import {
+  MockTaskEvaluationProvider,
+  TaskEvaluationProvider,
+} from './task-evaluation.provider';
+import { AuditLogService } from './audit-log.service';
+import {
+  AuditEventListQueryDto,
+  AuditEventResponseDto,
+  mapAuditEventToDto,
+} from './dto/audit-event.dto';
+import { AuditEventType } from './entities/audit-event.entity';
 
 export type UploadedLearningMaterialFile = {
   originalname?: string;
@@ -144,6 +179,12 @@ type CourseVersionSnapshotTask = {
   completionCriteria?: unknown;
   isPublished?: boolean;
   demoKey?: string | null;
+  gradingMode?: TaskGradingMode | string;
+  workMode?: TaskWorkMode | string;
+  maxPoints?: number | string | null;
+  passThreshold?: number | string | null;
+  feedbackRequired?: boolean;
+  allowRetries?: boolean;
 };
 
 type CourseVersionSnapshotMaterial = {
@@ -235,6 +276,8 @@ export class CoursesService {
     private enrollmentRepository: Repository<Enrollment>,
     @InjectRepository(Task)
     private taskRepository: Repository<Task>,
+    @InjectRepository(TaskAssessment)
+    private taskAssessmentRepository: Repository<TaskAssessment>,
     @InjectRepository(TaskProgress)
     private taskProgressRepository: Repository<TaskProgress>,
     @InjectRepository(ContentRelease)
@@ -248,7 +291,15 @@ export class CoursesService {
     @InjectRepository(CalendarEvent)
     private calendarEventRepository: Repository<CalendarEvent>,
     private readonly materialStorage: LocalMaterialStorage,
+    @Optional()
+    private readonly auditLogService?: AuditLogService,
+    @Optional()
+    @InjectRepository(GroupTaskProgress)
+    private readonly groupTaskProgressRepository?: Repository<GroupTaskProgress>,
   ) {}
+
+  private readonly taskEvaluationProvider: TaskEvaluationProvider =
+    new MockTaskEvaluationProvider();
 
   /**
    * Get hello message for testing
@@ -265,6 +316,83 @@ export class CoursesService {
 
   private toUserId(userId: string | number): string {
     return String(userId);
+  }
+
+  private parseAuditLimit(value: unknown): number {
+    const numericLimit = Number(value ?? 100);
+
+    if (!Number.isFinite(numericLimit)) {
+      return 100;
+    }
+
+    return Math.min(Math.max(Math.floor(numericLimit), 1), 100);
+  }
+
+  private parseAuditDate(value: unknown, fieldName: string): Date | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const date = new Date(String(value));
+
+    if (Number.isNaN(date.getTime())) {
+      throw new ApiValidationError(`Invalid audit ${fieldName} date`);
+    }
+
+    return date;
+  }
+
+  private async resolveAuditActorRole(
+    courseId?: string | number | null,
+    actorUserId?: string | number | null,
+  ): Promise<string | undefined> {
+    if (!courseId || actorUserId === undefined || actorUserId === null) {
+      return undefined;
+    }
+
+    try {
+      return (await this.resolveCourseRole(courseId, actorUserId)) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async recordAuditEvent(input: {
+    eventType: AuditEventType;
+    actorUserId?: string | number | null;
+    actorRole?: string | null;
+    courseId?: string | number | null;
+    courseRunId?: string | null;
+    courseVersionId?: string | null;
+    entityType?: string | null;
+    entityId?: string | null;
+    summary: string;
+    metadataJson?: Record<string, unknown> | null;
+  }): Promise<void> {
+    if (!this.auditLogService) {
+      return;
+    }
+
+    const actorUserId =
+      input.actorUserId === undefined || input.actorUserId === null
+        ? undefined
+        : this.toUserId(input.actorUserId);
+    const courseId = input.courseId ? this.toCourseId(input.courseId) : undefined;
+    const actorRole =
+      input.actorRole ?? (await this.resolveAuditActorRole(courseId, actorUserId));
+
+    await this.auditLogService.recordEvent({
+      eventType: input.eventType,
+      actorUserId,
+      actorRole,
+      courseId,
+      courseRunId: input.courseRunId,
+      courseVersionId: input.courseVersionId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      summary: input.summary,
+      metadataJson: input.metadataJson,
+    });
   }
 
   private toOptionalNumber(value: unknown): number | undefined {
@@ -989,17 +1117,24 @@ export class CoursesService {
       return conditionalVisibility;
     }
 
-    const progress = material.releaseAfterTaskId
-      ? await this.taskProgressRepository.findOne({
+    const releaseTask = material.releaseAfterTaskId
+      ? await this.taskRepository.findOne({
         where: {
-          enrollmentId: enrollment.id,
-          taskId: material.releaseAfterTaskId,
+          id: material.releaseAfterTaskId,
         },
       })
       : null;
-    const visible =
-      progress?.status === TaskProgressStatus.COMPLETED &&
-      progress.resultPassed === true;
+    const progress = releaseTask
+      ? await this.taskProgressRepository.findOne({
+        where: {
+          enrollmentId: enrollment.id,
+          taskId: releaseTask.id,
+        },
+      })
+      : null;
+    const visible = releaseTask
+      ? this.isTaskCompletionSuccessful(releaseTask, progress)
+      : false;
 
     return {
       ...conditionalVisibility,
@@ -1283,6 +1418,12 @@ export class CoursesService {
         completionCriteria: task.completionCriteria ?? {},
         isPublished: task.isPublished,
         demoKey: task.demoKey,
+        gradingMode: task.gradingMode ?? TaskGradingMode.NOT_GRADED,
+        workMode: task.workMode ?? TaskWorkMode.INDIVIDUAL,
+        maxPoints: task.maxPoints,
+        passThreshold: task.passThreshold,
+        feedbackRequired: task.feedbackRequired === true,
+        allowRetries: task.allowRetries === true,
       })),
     };
   }
@@ -1901,6 +2042,12 @@ export class CoursesService {
       task.completionCriteria = source.completionCriteria;
       task.isPublished = source.isPublished;
       task.demoKey = source.demoKey;
+      task.gradingMode = source.gradingMode ?? TaskGradingMode.NOT_GRADED;
+      task.workMode = source.workMode ?? TaskWorkMode.INDIVIDUAL;
+      task.maxPoints = source.maxPoints;
+      task.passThreshold = source.passThreshold;
+      task.feedbackRequired = source.feedbackRequired === true;
+      task.allowRetries = source.allowRetries === true;
       task.createdBy = actorId;
       task.updatedBy = actorId;
       const savedTask = await this.taskRepository.save(task);
@@ -1949,6 +2096,34 @@ export class CoursesService {
     return Object.values(TaskUnlockMode).includes(normalizedValue)
       ? normalizedValue
       : TaskUnlockMode.IMMEDIATE;
+  }
+
+  private normalizeSnapshotTaskGradingMode(value: unknown): TaskGradingMode {
+    const normalizedValue = String(value ?? TaskGradingMode.NOT_GRADED).toUpperCase() as TaskGradingMode;
+
+    return Object.values(TaskGradingMode).includes(normalizedValue)
+      ? normalizedValue
+      : TaskGradingMode.NOT_GRADED;
+  }
+
+  private normalizeSnapshotTaskWorkMode(value: unknown): TaskWorkMode {
+    const normalizedValue = String(value ?? TaskWorkMode.INDIVIDUAL).toUpperCase() as TaskWorkMode;
+
+    return Object.values(TaskWorkMode).includes(normalizedValue)
+      ? normalizedValue
+      : TaskWorkMode.INDIVIDUAL;
+  }
+
+  private parseSnapshotTaskNumber(value?: number | string | null): number | null {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+
+    const parsedValue = Number(value);
+
+    return Number.isFinite(parsedValue) && parsedValue >= 0
+      ? parsedValue
+      : null;
   }
 
   private normalizeSnapshotMaterialType(value: unknown): LearningMaterialType {
@@ -2043,6 +2218,12 @@ export class CoursesService {
       task.completionCriteria = this.cloneJsonValue(source.completionCriteria ?? {});
       task.isPublished = source.isPublished === true;
       task.demoKey = source.demoKey ?? undefined;
+      task.gradingMode = this.normalizeSnapshotTaskGradingMode(source.gradingMode);
+      task.workMode = this.normalizeSnapshotTaskWorkMode(source.workMode);
+      task.maxPoints = this.parseSnapshotTaskNumber(source.maxPoints);
+      task.passThreshold = this.parseSnapshotTaskNumber(source.passThreshold);
+      task.feedbackRequired = source.feedbackRequired === true;
+      task.allowRetries = source.allowRetries === true;
       task.createdBy = actorId;
       task.updatedBy = actorId;
       const savedTask = await this.taskRepository.save(task);
@@ -2758,6 +2939,43 @@ export class CoursesService {
     return enrollments.map(mapEnrollmentToDto);
   }
 
+  async listAuditEvents(
+    courseId: string | number,
+    query: AuditEventListQueryDto = {},
+    actorUserId?: string | number,
+  ): Promise<AuditEventResponseDto[]> {
+    if (!this.auditLogService) {
+      return [];
+    }
+
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      normalizedCourseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    if (query.courseRunId) {
+      await this.assertCourseRunManageable(
+        normalizedCourseId,
+        query.courseRunId,
+        actorId,
+      );
+    }
+
+    const events = await this.auditLogService.listEvents({
+      courseId: normalizedCourseId,
+      courseRunId: query.courseRunId,
+      eventType: query.eventType,
+      from: this.parseAuditDate(query.from, 'from'),
+      to: this.parseAuditDate(query.to, 'to'),
+      limit: this.parseAuditLimit(query.limit),
+    });
+
+    return events.map(mapAuditEventToDto);
+  }
+
   async createCourse(
     body: any,
     actorUserId?: string | number,
@@ -2789,7 +3007,7 @@ export class CoursesService {
 
     const savedCourse = await this.coursesRepository.save(course);
     const initialRun = await this.createInitialCourseRun(savedCourse, actorId, body);
-    await this.createInitialContentVersionForRun(
+    const initialVersion = await this.createInitialContentVersionForRun(
       savedCourse,
       initialRun,
       actorId ?? savedCourse.created_by ?? 'system',
@@ -2817,6 +3035,49 @@ export class CoursesService {
         await this.enrollmentRepository.save(enrollment);
       }
     }
+
+    await this.recordAuditEvent({
+      eventType: AuditEventType.COURSE_CREATED,
+      actorUserId: actorId ?? ownerId?.toString(),
+      actorRole: CourseMemberRole.TEACHER,
+      courseId: savedCourse.id,
+      entityType: 'course',
+      entityId: savedCourse.id,
+      summary: `Kurs erstellt: ${savedCourse.title}`,
+      metadataJson: {
+        status: savedCourse.status,
+        recurrenceType: savedCourse.recurrenceType,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: AuditEventType.COURSE_RUN_CREATED,
+      actorUserId: actorId ?? ownerId?.toString(),
+      actorRole: CourseMemberRole.TEACHER,
+      courseId: savedCourse.id,
+      courseRunId: initialRun.id,
+      entityType: 'course_run',
+      entityId: initialRun.id,
+      summary: `Initialer Kursdurchlauf erstellt: ${initialRun.label}`,
+      metadataJson: {
+        status: initialRun.status,
+        active: initialRun.isActive,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: AuditEventType.CONTENT_VERSION_CREATED,
+      actorUserId: actorId ?? ownerId?.toString(),
+      actorRole: CourseMemberRole.TEACHER,
+      courseId: savedCourse.id,
+      courseRunId: initialRun.id,
+      courseVersionId: initialVersion.id,
+      entityType: 'course_version',
+      entityId: initialVersion.id,
+      summary: `Initiale Inhaltsversion erstellt: ${initialVersion.label}`,
+      metadataJson: {
+        versionNumber: initialVersion.version_number,
+        active: initialVersion.is_active,
+      },
+    });
 
     return mapCourseToDto(savedCourse);
   }
@@ -2898,6 +3159,19 @@ export class CoursesService {
       savedEnrollment,
       actorId,
     );
+    await this.recordAuditEvent({
+      eventType: AuditEventType.STUDENT_ENROLLED,
+      actorUserId: actorId,
+      actorRole: CourseMemberRole.STUDENT,
+      courseId: normalizedCourseId,
+      courseRunId: currentRun.id,
+      entityType: 'enrollment',
+      entityId: savedEnrollment.id,
+      summary: `Student eingeschrieben: ${actorId}`,
+      metadataJson: {
+        studentId: actorId,
+      },
+    });
 
     return mapEnrollmentToDto(savedEnrollment);
   }
@@ -2922,11 +3196,25 @@ export class CoursesService {
       );
     }
 
-    await this.enrollmentRepository.delete({
+    const result = await this.enrollmentRepository.delete({
       courseId: this.toCourseId(courseId),
       courseRunId: (await this.getCurrentCourseRunOrCreate(courseId)).id,
       userId: normalizedUserId,
     });
+
+    if ((result.affected ?? 0) > 0) {
+      await this.recordAuditEvent({
+        eventType: AuditEventType.STUDENT_REMOVED,
+        actorUserId: actorId,
+        courseId,
+        entityType: 'enrollment',
+        entityId: normalizedUserId,
+        summary: `Student aus Kurs entfernt: ${normalizedUserId}`,
+        metadataJson: {
+          studentId: normalizedUserId,
+        },
+      });
+    }
   }
 
   async updateCourse(
@@ -2989,7 +3277,21 @@ export class CoursesService {
 
     course.updated_by = actorId;
 
-    return mapCourseToDto(await this.coursesRepository.save(course));
+    const savedCourse = await this.coursesRepository.save(course);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.COURSE_UPDATED,
+      actorUserId: actorId,
+      courseId: savedCourse.id,
+      entityType: 'course',
+      entityId: savedCourse.id,
+      summary: `Kurs aktualisiert: ${savedCourse.title}`,
+      metadataJson: {
+        status: savedCourse.status,
+        recurrenceType: savedCourse.recurrenceType,
+      },
+    });
+
+    return mapCourseToDto(savedCourse);
   }
 
   async changeUserRole(
@@ -3080,6 +3382,20 @@ export class CoursesService {
 
     const savedMaterial = await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_CREATED,
+      actorUserId: createdBy,
+      courseId: savedMaterial.courseId,
+      courseRunId: savedMaterial.courseRunId,
+      courseVersionId: savedMaterial.courseVersionId,
+      entityType: 'learning_material',
+      entityId: savedMaterial.id,
+      summary: `Lernmaterial erstellt: ${savedMaterial.title}`,
+      metadataJson: {
+        type: savedMaterial.type,
+        publicationStatus: savedMaterial.publicationStatus,
+      },
+    });
 
     return savedMaterial;
   }
@@ -3142,6 +3458,22 @@ export class CoursesService {
 
     const savedMaterial = await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_CREATED,
+      actorUserId: actorId,
+      courseId: savedMaterial.courseId,
+      courseRunId: savedMaterial.courseRunId,
+      courseVersionId: savedMaterial.courseVersionId,
+      entityType: 'learning_material',
+      entityId: savedMaterial.id,
+      summary: `Datei-Material erstellt: ${savedMaterial.title}`,
+      metadataJson: {
+        type: savedMaterial.type,
+        mimeType: savedMaterial.mimeType,
+        fileSize: savedMaterial.fileSize,
+        publicationStatus: savedMaterial.publicationStatus,
+      },
+    });
 
     return this.mapLearningMaterialForActor(
       savedMaterial,
@@ -3189,6 +3521,20 @@ export class CoursesService {
 
     const savedMaterial = await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_CREATED,
+      actorUserId: actorId,
+      courseId: savedMaterial.courseId,
+      courseRunId: savedMaterial.courseRunId,
+      courseVersionId: savedMaterial.courseVersionId,
+      entityType: 'learning_material',
+      entityId: savedMaterial.id,
+      summary: `Externer Link erstellt: ${savedMaterial.title}`,
+      metadataJson: {
+        type: savedMaterial.type,
+        publicationStatus: savedMaterial.publicationStatus,
+      },
+    });
 
     return this.mapLearningMaterialForActor(
       savedMaterial,
@@ -3379,6 +3725,20 @@ export class CoursesService {
 
     const savedMaterial = await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_UPDATED,
+      actorUserId: actorId,
+      courseId: savedMaterial.courseId,
+      courseRunId: savedMaterial.courseRunId,
+      courseVersionId: savedMaterial.courseVersionId,
+      entityType: 'learning_material',
+      entityId: savedMaterial.id,
+      summary: `Lernmaterial aktualisiert: ${savedMaterial.title}`,
+      metadataJson: {
+        type: savedMaterial.type,
+        publicationStatus: savedMaterial.publicationStatus,
+      },
+    });
 
     return this.mapLearningMaterialForActor(
       savedMaterial,
@@ -3433,6 +3793,19 @@ export class CoursesService {
     const savedMaterials = (await this.learningMaterialRepository.save(materials))
       .sort((left, right) => left.sortOrder - right.sortOrder);
     await this.refreshCourseVersionContent(version.id);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_UPDATED,
+      actorUserId: actorId,
+      courseId,
+      courseRunId: currentRun.id,
+      courseVersionId: version.id,
+      entityType: 'learning_material_sort_order',
+      entityId: this.toCourseId(courseId),
+      summary: 'Sortierung der Lernmaterialien aktualisiert',
+      metadataJson: {
+        materialIds: savedMaterials.map((material) => material.id),
+      },
+    });
 
     return Promise.all(
       savedMaterials.map((material) =>
@@ -3461,6 +3834,19 @@ export class CoursesService {
 
     await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(material.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_DELETED,
+      actorUserId: actorId,
+      courseId: material.courseId,
+      courseRunId: material.courseRunId,
+      courseVersionId: material.courseVersionId,
+      entityType: 'learning_material',
+      entityId: material.id,
+      summary: `Lernmaterial archiviert: ${material.title}`,
+      metadataJson: {
+        type: material.type,
+      },
+    });
   }
 
   async publishLearningMaterial(
@@ -3479,6 +3865,19 @@ export class CoursesService {
 
     const savedMaterial = await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_UPDATED,
+      actorUserId: actorId,
+      courseId: savedMaterial.courseId,
+      courseRunId: savedMaterial.courseRunId,
+      courseVersionId: savedMaterial.courseVersionId,
+      entityType: 'learning_material',
+      entityId: savedMaterial.id,
+      summary: `Lernmaterial veröffentlicht: ${savedMaterial.title}`,
+      metadataJson: {
+        publicationStatus: savedMaterial.publicationStatus,
+      },
+    });
 
     return this.mapLearningMaterialForActor(
       savedMaterial,
@@ -3502,6 +3901,19 @@ export class CoursesService {
 
     const savedMaterial = await this.learningMaterialRepository.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.MATERIAL_UPDATED,
+      actorUserId: actorId,
+      courseId: savedMaterial.courseId,
+      courseRunId: savedMaterial.courseRunId,
+      courseVersionId: savedMaterial.courseVersionId,
+      entityType: 'learning_material',
+      entityId: savedMaterial.id,
+      summary: `Lernmaterial zurückgezogen: ${savedMaterial.title}`,
+      metadataJson: {
+        publicationStatus: savedMaterial.publicationStatus,
+      },
+    });
 
     return this.mapLearningMaterialForActor(
       savedMaterial,
@@ -4272,6 +4684,38 @@ export class CoursesService {
     }
 
     await this.refreshCourseVersionContent(savedVersion.id);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.CONTENT_VERSION_CREATED,
+      actorUserId: actorId,
+      courseId: course.id,
+      courseRunId: run.id,
+      courseVersionId: savedVersion.id,
+      entityType: 'course_version',
+      entityId: savedVersion.id,
+      summary: `Inhaltsversion erstellt: ${savedVersion.label}`,
+      metadataJson: {
+        versionNumber: savedVersion.version_number,
+        active: savedVersion.is_active,
+        copyMode,
+        sourceVersionId: sourceVersion?.id ?? null,
+      },
+    });
+
+    if (savedVersion.is_active) {
+      await this.recordAuditEvent({
+        eventType: AuditEventType.CONTENT_VERSION_ACTIVATED,
+        actorUserId: actorId,
+        courseId: course.id,
+        courseRunId: run.id,
+        courseVersionId: savedVersion.id,
+        entityType: 'course_version',
+        entityId: savedVersion.id,
+        summary: `Inhaltsversion aktiviert: ${savedVersion.label}`,
+        metadataJson: {
+          versionNumber: savedVersion.version_number,
+        },
+      });
+    }
 
     return this.mapCourseVersionWithTemplateInfo(
       await this.courseVersionRepository.findOne({
@@ -4293,12 +4737,25 @@ export class CoursesService {
       CoursePermission.ManageCourse,
     );
 
-    return this.mapCourseVersionWithTemplateInfo(
-      await this.setActiveCourseVersion(
-        this.toCourseId(courseId),
-        versionId,
-      ),
+    const savedVersion = await this.setActiveCourseVersion(
+      this.toCourseId(courseId),
+      versionId,
     );
+    await this.recordAuditEvent({
+      eventType: AuditEventType.CONTENT_VERSION_ACTIVATED,
+      actorUserId: actorId,
+      courseId,
+      courseRunId: savedVersion.course_run_id,
+      courseVersionId: savedVersion.id,
+      entityType: 'course_version',
+      entityId: savedVersion.id,
+      summary: `Inhaltsversion aktiviert: ${savedVersion.label}`,
+      metadataJson: {
+        versionNumber: savedVersion.version_number,
+      },
+    });
+
+    return this.mapCourseVersionWithTemplateInfo(savedVersion);
   }
 
   async activateCourseVersionForRun(
@@ -4405,6 +4862,19 @@ export class CoursesService {
     }
 
     await this.courseVersionRepository.delete(version.id);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.CONTENT_VERSION_DELETED,
+      actorUserId: actorId,
+      courseId,
+      courseRunId: run.id,
+      courseVersionId: version.id,
+      entityType: 'course_version',
+      entityId: version.id,
+      summary: `Inhaltsversion gelöscht: ${version.label}`,
+      metadataJson: {
+        versionNumber: version.version_number,
+      },
+    });
   }
 
   async listCourseRuns(
@@ -4581,6 +5051,48 @@ export class CoursesService {
     if (activate) {
       await this.setActiveCourseRun(course.id, savedRun.id);
     }
+    await this.recordAuditEvent({
+      eventType: AuditEventType.COURSE_RUN_CREATED,
+      actorUserId: actorId,
+      courseId: course.id,
+      courseRunId: savedRun.id,
+      entityType: 'course_run',
+      entityId: savedRun.id,
+      summary: `Kursdurchlauf erstellt: ${savedRun.label}`,
+      metadataJson: {
+        status: savedRun.status,
+        active: activate,
+        sourceRunId,
+        sourceVersionId: sourceVersion?.id ?? null,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: AuditEventType.CONTENT_VERSION_CREATED,
+      actorUserId: actorId,
+      courseId: course.id,
+      courseRunId: savedRun.id,
+      courseVersionId: targetVersion.id,
+      entityType: 'course_version',
+      entityId: targetVersion.id,
+      summary: `Initiale Inhaltsversion erstellt: ${targetVersion.label}`,
+      metadataJson: {
+        versionNumber: targetVersion.version_number,
+        active: targetVersion.is_active,
+        sourceVersionId: sourceVersion?.id ?? null,
+      },
+    });
+
+    if (activate) {
+      await this.recordAuditEvent({
+        eventType: AuditEventType.COURSE_RUN_ACTIVATED,
+        actorUserId: actorId,
+        courseId: course.id,
+        courseRunId: savedRun.id,
+        entityType: 'course_run',
+        entityId: savedRun.id,
+        summary: `Kursdurchlauf aktiviert: ${savedRun.label}`,
+      });
+    }
 
     const reloadedRun = await this.courseRunRepository.findOne({
       where: {
@@ -4675,9 +5187,18 @@ export class CoursesService {
       CoursePermission.ManageCourse,
     );
 
-    return this.mapCourseRunWithCounts(
-      await this.setActiveCourseRun(this.toCourseId(courseId), runId),
-    );
+    const savedRun = await this.setActiveCourseRun(this.toCourseId(courseId), runId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.COURSE_RUN_ACTIVATED,
+      actorUserId: actorId,
+      courseId,
+      courseRunId: savedRun.id,
+      entityType: 'course_run',
+      entityId: savedRun.id,
+      summary: `Kursdurchlauf aktiviert: ${savedRun.label}`,
+    });
+
+    return this.mapCourseRunWithCounts(savedRun);
   }
 
   async deleteOrArchiveCourseRun(
@@ -4829,6 +5350,94 @@ export class CoursesService {
     }
 
     return normalizedMode;
+  }
+
+  private normalizeTaskGradingMode(
+    gradingMode: unknown,
+    defaultMode = TaskGradingMode.NOT_GRADED,
+  ): TaskGradingMode {
+    if (gradingMode === undefined || gradingMode === null || gradingMode === '') {
+      return defaultMode;
+    }
+
+    const normalizedMode = String(gradingMode).toUpperCase() as TaskGradingMode;
+
+    if (!Object.values(TaskGradingMode).includes(normalizedMode)) {
+      throw new ApiValidationError('Invalid task grading mode');
+    }
+
+    return normalizedMode;
+  }
+
+  private normalizeTaskWorkMode(
+    workMode: unknown,
+    defaultMode = TaskWorkMode.INDIVIDUAL,
+  ): TaskWorkMode {
+    if (workMode === undefined || workMode === null || workMode === '') {
+      return defaultMode;
+    }
+
+    const normalizedMode = String(workMode).toUpperCase() as TaskWorkMode;
+
+    if (!Object.values(TaskWorkMode).includes(normalizedMode)) {
+      throw new ApiValidationError('Invalid task work mode');
+    }
+
+    return normalizedMode;
+  }
+
+  private parseTaskAssessmentNumber(
+    value: unknown,
+    fieldName: string,
+    options: { required?: boolean; min?: number; max?: number } = {},
+  ): number | null {
+    if (value === undefined || value === null || value === '') {
+      if (options.required) {
+        throw new ApiValidationError(`${fieldName} is required`);
+      }
+
+      return null;
+    }
+
+    const parsedValue = Number(value);
+
+    if (!Number.isFinite(parsedValue)) {
+      throw new ApiValidationError(`${fieldName} must be a valid number`);
+    }
+
+    const min = options.min ?? 0;
+
+    if (parsedValue < min) {
+      throw new ApiValidationError(`${fieldName} cannot be below ${min}`);
+    }
+
+    if (options.max !== undefined && parsedValue > options.max) {
+      throw new ApiValidationError(`${fieldName} cannot be above ${options.max}`);
+    }
+
+    return Math.round(parsedValue * 100) / 100;
+  }
+
+  private validateTaskGradingConfiguration(
+    gradingMode: TaskGradingMode,
+    maxPoints?: number | null,
+    passThreshold?: number | null,
+  ): void {
+    if (
+      (gradingMode === TaskGradingMode.MANUAL ||
+        gradingMode === TaskGradingMode.AUTOMATIC_MOCK) &&
+      (maxPoints === undefined || maxPoints === null || maxPoints <= 0)
+    ) {
+      throw new ApiValidationError('Bewertete Aufgaben benötigen eine maximale Punktzahl.');
+    }
+
+    if (
+      passThreshold !== undefined &&
+      passThreshold !== null &&
+      (passThreshold < 0 || passThreshold > 100)
+    ) {
+      throw new ApiValidationError('Die Bestehensgrenze muss zwischen 0 und 100 Prozent liegen.');
+    }
   }
 
   private parseTaskOrder(order: unknown): number {
@@ -5030,14 +5639,23 @@ export class CoursesService {
       return false;
     }
 
-    const prerequisiteProgress = await this.taskProgressRepository.findOne({
-      where: {
-        taskId: task.prerequisiteTaskId,
-        enrollmentId,
-      },
-    });
+    const [prerequisite, prerequisiteProgress] = await Promise.all([
+      this.taskRepository.findOne({
+        where: {
+          id: task.prerequisiteTaskId,
+        },
+      }),
+      this.taskProgressRepository.findOne({
+        where: {
+          taskId: task.prerequisiteTaskId,
+          enrollmentId,
+        },
+      }),
+    ]);
 
-    return prerequisiteProgress?.status === TaskProgressStatus.COMPLETED;
+    return prerequisite
+      ? this.isTaskCompletionSuccessful(prerequisite, prerequisiteProgress)
+      : false;
   }
 
   private async isTaskEligibleByRules(
@@ -5080,6 +5698,352 @@ export class CoursesService {
         enrollmentId,
       },
     });
+  }
+
+  private async findTaskAssessment(
+    task: Task,
+    studentId: string | number,
+  ): Promise<TaskAssessment | null> {
+    return this.taskAssessmentRepository.findOne({
+      where: {
+        courseRunId: task.courseRunId,
+        taskId: task.id,
+        assessmentTargetType: TaskAssessmentTargetType.INDIVIDUAL,
+        studentId: this.toUserId(studentId),
+      },
+    });
+  }
+
+  private getGroupTaskProgressRepository(): Repository<GroupTaskProgress> {
+    if (!this.groupTaskProgressRepository) {
+      throw new Error('Group task progress repository is not configured');
+    }
+
+    return this.groupTaskProgressRepository;
+  }
+
+  private async findGroupTaskAssessment(
+    task: Task,
+    groupId: string,
+  ): Promise<TaskAssessment | null> {
+    return this.taskAssessmentRepository.findOne({
+      where: {
+        courseRunId: task.courseRunId,
+        taskId: task.id,
+        assessmentTargetType: TaskAssessmentTargetType.GROUP,
+        groupId,
+      },
+    });
+  }
+
+  private async ensureTaskAssessment(
+    task: Task,
+    enrollment: Enrollment,
+  ): Promise<TaskAssessment> {
+    let assessment = await this.findTaskAssessment(task, enrollment.userId);
+
+    if (!assessment) {
+      assessment = new TaskAssessment();
+      assessment.courseRunId = task.courseRunId;
+      assessment.courseVersionId = task.courseVersionId;
+      assessment.taskId = task.id;
+      assessment.task = task;
+      assessment.assessmentTargetType = TaskAssessmentTargetType.INDIVIDUAL;
+      assessment.studentId = enrollment.userId;
+      assessment.groupId = null;
+      assessment.gradingMode = task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+      assessment.status = TaskAssessmentStatus.NOT_SUBMITTED;
+      assessment.maxPoints = task.maxPoints ?? null;
+      assessment.passThreshold = task.passThreshold ?? null;
+    }
+
+    assessment.courseRunId = task.courseRunId;
+    assessment.courseVersionId = task.courseVersionId;
+    assessment.taskId = task.id;
+    assessment.assessmentTargetType = TaskAssessmentTargetType.INDIVIDUAL;
+    assessment.studentId = enrollment.userId;
+    assessment.groupId = null;
+    assessment.gradingMode = task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+    assessment.maxPoints = task.maxPoints ?? assessment.maxPoints ?? null;
+    assessment.passThreshold = task.passThreshold ?? assessment.passThreshold ?? null;
+
+    return assessment;
+  }
+
+  private async ensureGroupTaskAssessment(
+    task: Task,
+    group: CourseGroup,
+  ): Promise<TaskAssessment> {
+    let assessment = await this.findGroupTaskAssessment(task, group.id);
+
+    if (!assessment) {
+      assessment = new TaskAssessment();
+      assessment.courseRunId = task.courseRunId;
+      assessment.courseVersionId = task.courseVersionId;
+      assessment.taskId = task.id;
+      assessment.task = task;
+      assessment.status = TaskAssessmentStatus.NOT_SUBMITTED;
+      assessment.maxPoints = task.maxPoints ?? null;
+      assessment.passThreshold = task.passThreshold ?? null;
+    }
+
+    assessment.courseRunId = task.courseRunId;
+    assessment.courseVersionId = task.courseVersionId;
+    assessment.taskId = task.id;
+    assessment.assessmentTargetType = TaskAssessmentTargetType.GROUP;
+    assessment.studentId = null;
+    assessment.groupId = group.id;
+    assessment.group = group;
+    assessment.gradingMode = task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+    assessment.maxPoints = task.maxPoints ?? assessment.maxPoints ?? null;
+    assessment.passThreshold = task.passThreshold ?? assessment.passThreshold ?? null;
+
+    return assessment;
+  }
+
+  private async saveTaskAssessment(
+    assessment: TaskAssessment,
+  ): Promise<TaskAssessment> {
+    return this.taskAssessmentRepository.save(assessment);
+  }
+
+  private async findStudentEnrollmentForRunOrThrow(
+    courseId: string,
+    studentId: string | number,
+    courseRunId: string,
+  ): Promise<Enrollment> {
+    const enrollment = await this.findCourseEnrollment(courseId, studentId, courseRunId);
+
+    if (!enrollment || enrollment.role !== CourseMemberRole.STUDENT) {
+      throw new ApiForbiddenError(
+        'Student is not enrolled in this course run',
+        'COURSE_ACCESS_DENIED',
+      );
+    }
+
+    return enrollment;
+  }
+
+  private normalizeStudyGroupName(name: unknown): string {
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      throw new ApiValidationError('Group name is required');
+    }
+
+    return name.trim();
+  }
+
+  private normalizeStudyGroupDescription(description: unknown): string | null {
+    if (description === undefined || description === null) {
+      return null;
+    }
+
+    const normalized = String(description).trim();
+
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private async findStudyGroupInRunOrThrow(
+    courseId: string,
+    runId: string,
+    groupId: string,
+    relations: string[] = ['memberships'],
+  ): Promise<CourseGroup> {
+    const group = await this.courseGroupRepository.findOne({
+      where: {
+        id: groupId,
+        course_id: courseId,
+        course_run_id: runId,
+      },
+      relations,
+    });
+
+    if (!group) {
+      throw new ApiNotFoundError('Study group not found', 'COURSE_NOT_FOUND');
+    }
+
+    return group;
+  }
+
+  private async findStudentStudyGroupInRun(
+    runId: string,
+    studentId: string | number,
+  ): Promise<CourseGroup | null> {
+    const memberships = await this.groupMembershipRepository.find({
+      where: {
+        user_id: this.toUserId(studentId),
+      },
+      relations: ['group', 'group.memberships'],
+    });
+
+    const membership = memberships.find((entry) =>
+      entry.left_at == null && entry.group?.course_run_id === runId,
+    );
+
+    return membership?.group ?? null;
+  }
+
+  private async assertStudentStudyGroupInRun(
+    courseId: string,
+    runId: string,
+    studentId: string | number,
+  ): Promise<CourseGroup> {
+    const group = await this.findStudentStudyGroupInRun(runId, studentId);
+
+    if (!group || group.course_id !== courseId) {
+      throw new ApiForbiddenError(
+        'Du bist noch keiner Gruppe zugeordnet. Bitte wende dich an die Lehrperson.',
+        'COURSE_ACCESS_DENIED',
+      );
+    }
+
+    return group;
+  }
+
+  private async ensureGroupTaskProgress(
+    task: Task,
+    group: CourseGroup,
+    actorId = 'system',
+  ): Promise<GroupTaskProgress> {
+    const repository = this.getGroupTaskProgressRepository();
+    let progress = await repository.findOne({
+      where: {
+        courseRunId: task.courseRunId,
+        taskId: task.id,
+        groupId: group.id,
+      },
+    });
+
+    if (!progress) {
+      progress = new GroupTaskProgress();
+      progress.courseRunId = task.courseRunId;
+      progress.courseVersionId = task.courseVersionId;
+      progress.taskId = task.id;
+      progress.task = task;
+      progress.groupId = group.id;
+      progress.group = group;
+      progress.status = TaskProgressStatus.AVAILABLE;
+      progress.progressData = {};
+      progress.createdBy = actorId;
+    }
+
+    progress.courseRunId = task.courseRunId;
+    progress.courseVersionId = task.courseVersionId;
+    progress.taskId = task.id;
+    progress.groupId = group.id;
+    progress.updatedBy = actorId;
+
+    return repository.save(progress);
+  }
+
+  private groupProgressCompletionPercentage(status: TaskProgressStatus): number {
+    if (status === TaskProgressStatus.COMPLETED) {
+      return 100;
+    }
+
+    if (status === TaskProgressStatus.SUBMITTED) {
+      return 75;
+    }
+
+    if (status === TaskProgressStatus.IN_PROGRESS) {
+      return 25;
+    }
+
+    return 0;
+  }
+
+  private async applyGroupProgressToMembers(
+    task: Task,
+    group: CourseGroup,
+    groupProgress: GroupTaskProgress,
+    assessment: TaskAssessment | null,
+    actorId: string,
+  ): Promise<void> {
+    const members = group.memberships?.length
+      ? group.memberships
+      : await this.groupMembershipRepository.find({
+        where: { group_id: group.id },
+      });
+
+    for (const membership of members.filter((member) => member.left_at == null)) {
+      const enrollment = await this.findStudentEnrollmentForRunOrThrow(
+        task.courseId,
+        membership.user_id,
+        task.courseRunId,
+      );
+      const progress = await this.ensureTaskProgress(task, enrollment, actorId);
+      const now = new Date();
+
+      progress.status = groupProgress.status;
+      progress.completionPercentage = this.groupProgressCompletionPercentage(groupProgress.status);
+      progress.startedAt = groupProgress.startedAt ?? progress.startedAt ?? now;
+      progress.completedAt = groupProgress.completedAt ?? undefined;
+      progress.resultPassed = assessment?.passed ?? undefined;
+      progress.resultRecordedAt = assessment?.assessedAt ?? undefined;
+      progress.updatedBy = actorId;
+      await this.taskProgressRepository.save(progress);
+
+      if (assessment?.passed === true) {
+        await this.unlockEligibleNextTasks(task, enrollment);
+      }
+    }
+  }
+
+  private async loadGroupTaskProgressDtos(
+    group: CourseGroup,
+  ) {
+    const repository = this.getGroupTaskProgressRepository();
+    const progressList = await repository.find({
+      where: {
+        groupId: group.id,
+      },
+      order: {
+        updatedAt: 'DESC',
+      },
+    });
+    const assessments = progressList.length > 0
+      ? await this.taskAssessmentRepository.find({
+        where: {
+          assessmentTargetType: TaskAssessmentTargetType.GROUP,
+          groupId: group.id,
+          taskId: In(progressList.map((progress) => progress.taskId)),
+        },
+      })
+      : [];
+    const assessmentsByTaskId = new Map(
+      assessments.map((assessment) => [assessment.taskId, assessment]),
+    );
+
+    return progressList.map((progress) =>
+      mapGroupTaskProgressToDto(progress, assessmentsByTaskId.get(progress.taskId)),
+    );
+  }
+
+  private async findGroupTaskProgress(
+    task: Task,
+    groupId: string,
+  ): Promise<GroupTaskProgress | null> {
+    return this.getGroupTaskProgressRepository().findOne({
+      where: {
+        courseRunId: task.courseRunId,
+        taskId: task.id,
+        groupId,
+      },
+    });
+  }
+
+  private isTaskCompletionSuccessful(
+    task: Task,
+    progress: TaskProgress | null,
+  ): boolean {
+    if (!progress || progress.status !== TaskProgressStatus.COMPLETED) {
+      return false;
+    }
+
+    if ((task.gradingMode ?? TaskGradingMode.NOT_GRADED) === TaskGradingMode.NOT_GRADED) {
+      return true;
+    }
+
+    return progress.resultPassed === true;
   }
 
   private async createLockedTaskProgress(
@@ -5242,13 +6206,67 @@ export class CoursesService {
 
     for (const task of visibleTasks) {
       const progress = await this.ensureTaskProgress(task, enrollment);
-      const lockedReason = await this.getTaskLockedReason(
+      let assessment = await this.findTaskAssessment(task, enrollment.userId);
+      let lockedReason = await this.getTaskLockedReason(
         task,
         progress,
         tasksById,
       );
+      let progressForDto = progress;
+      let groupContext = null;
 
-      taskDtos.push(mapLearningTaskWithProgressToDto(task, progress, lockedReason));
+      if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+        const studentGroup = await this.findStudentStudyGroupInRun(runId, enrollment.userId);
+
+        if (!studentGroup) {
+          if (progress.status !== TaskProgressStatus.LOCKED) {
+            lockedReason = 'Du bist noch keiner Gruppe zugeordnet. Bitte wende dich an die Lehrperson.';
+          }
+
+          progressForDto = {
+            ...progress,
+            status: TaskProgressStatus.LOCKED,
+            completionPercentage: 0,
+          } as TaskProgress;
+        } else {
+          const groupProgress = await this.findGroupTaskProgress(task, studentGroup.id);
+          const groupAssessment = await this.findGroupTaskAssessment(task, studentGroup.id);
+          assessment = groupAssessment;
+          groupContext = {
+            id: studentGroup.id,
+            name: studentGroup.name,
+            status: groupProgress?.status,
+            startedAt: groupProgress?.startedAt instanceof Date
+              ? groupProgress.startedAt.toISOString()
+              : null,
+            submittedAt: groupProgress?.submittedAt instanceof Date
+              ? groupProgress.submittedAt.toISOString()
+              : null,
+            completedAt: groupProgress?.completedAt instanceof Date
+              ? groupProgress.completedAt.toISOString()
+              : null,
+          };
+
+          if (groupProgress) {
+            progressForDto = {
+              ...progress,
+              status: groupProgress.status,
+              completionPercentage: this.groupProgressCompletionPercentage(groupProgress.status),
+              startedAt: groupProgress.startedAt ?? progress.startedAt,
+              completedAt: groupProgress.completedAt ?? progress.completedAt,
+              resultPassed: groupAssessment?.passed ?? progress.resultPassed,
+            } as TaskProgress;
+          }
+        }
+      }
+
+      taskDtos.push(mapLearningTaskWithProgressToDto(
+        task,
+        progressForDto,
+        lockedReason,
+        assessment,
+        groupContext,
+      ));
     }
 
     return {
@@ -5277,7 +6295,7 @@ export class CoursesService {
         completedAt: task.completedAt ? new Date(task.completedAt) : undefined,
         resultPassed: task.resultPassed,
         unlockSource: task.unlockSource,
-      } as TaskProgress),
+      } as TaskProgress, task.assessment, task.group),
     );
 
     return {
@@ -5337,6 +6355,51 @@ export class CoursesService {
     }
   }
 
+  private async applyAssessmentToProgress(
+    task: Task,
+    enrollment: Enrollment,
+    assessment: TaskAssessment,
+    actorId: string,
+  ): Promise<void> {
+    const progress = await this.ensureTaskProgress(task, enrollment, actorId);
+    const now = new Date();
+
+    if (assessment.status === TaskAssessmentStatus.PENDING_REVIEW) {
+      progress.status = TaskProgressStatus.SUBMITTED;
+      progress.completionPercentage = 75;
+      progress.startedAt = progress.startedAt ?? now;
+      progress.completedAt = undefined;
+      progress.resultPassed = undefined;
+      progress.updatedBy = actorId;
+      await this.taskProgressRepository.save(progress);
+      return;
+    }
+
+    if (assessment.passed === true) {
+      progress.status = TaskProgressStatus.COMPLETED;
+      progress.completionPercentage = 100;
+      progress.startedAt = progress.startedAt ?? now;
+      progress.completedAt = now;
+      progress.resultPassed = true;
+      progress.resultRecordedAt = now;
+      progress.updatedBy = actorId;
+      await this.taskProgressRepository.save(progress);
+      await this.unlockEligibleNextTasks(task, enrollment);
+      return;
+    }
+
+    if (assessment.passed === false) {
+      progress.status = TaskProgressStatus.FAILED;
+      progress.completionPercentage = 0;
+      progress.startedAt = progress.startedAt ?? now;
+      progress.completedAt = now;
+      progress.resultPassed = false;
+      progress.resultRecordedAt = now;
+      progress.updatedBy = actorId;
+      await this.taskProgressRepository.save(progress);
+    }
+  }
+
   async createLearningTask(
     courseId: string | number,
     body: CreateLearningTaskDto,
@@ -5354,9 +6417,18 @@ export class CoursesService {
       await this.getActiveCourseVersionForCurrentRunOrThrow(normalizedCourseId);
 
     const unlockMode = this.normalizeTaskUnlockMode(body?.unlockMode);
+    const gradingMode = this.normalizeTaskGradingMode(body?.gradingMode);
+    const workMode = this.normalizeTaskWorkMode(body?.workMode);
+    const maxPoints = this.parseTaskAssessmentNumber(body?.maxPoints, 'maxPoints');
+    const passThreshold = this.parseTaskAssessmentNumber(
+      body?.passThreshold,
+      'passThreshold',
+      { max: 100 },
+    );
     const prerequisiteTaskId = this.normalizeTaskPrerequisite(
       body?.prerequisiteTaskId,
     );
+    this.validateTaskGradingConfiguration(gradingMode, maxPoints, passThreshold);
 
     await this.validateTaskConfiguration(
       normalizedCourseId,
@@ -5380,12 +6452,34 @@ export class CoursesService {
     task.unlockMode = unlockMode;
     task.prerequisiteTaskId = prerequisiteTaskId;
     task.completionCriteria = body?.completionCriteria ?? {};
+    task.gradingMode = gradingMode;
+    task.workMode = workMode;
+    task.maxPoints = maxPoints;
+    task.passThreshold = passThreshold;
+    task.feedbackRequired = body?.feedbackRequired === true;
+    task.allowRetries = body?.allowRetries === true;
     task.isPublished = body?.isPublished === true;
     task.createdBy = actorId;
     task.updatedBy = actorId;
 
     const savedTask = await this.taskRepository.save(task);
     await this.refreshCourseVersionContent(savedTask.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.TASK_CREATED,
+      actorUserId: actorId,
+      courseId: savedTask.courseId,
+      courseRunId: savedTask.courseRunId,
+      courseVersionId: savedTask.courseVersionId,
+      entityType: 'task',
+      entityId: savedTask.id,
+      summary: `Aufgabe erstellt: ${savedTask.title}`,
+      metadataJson: {
+        gradingMode: savedTask.gradingMode,
+        workMode: savedTask.workMode,
+        unlockMode: savedTask.unlockMode,
+        published: savedTask.isPublished,
+      },
+    });
 
     return mapLearningTaskToDto(savedTask);
   }
@@ -5496,10 +6590,27 @@ export class CoursesService {
       body.unlockMode !== undefined
         ? this.normalizeTaskUnlockMode(body.unlockMode, task.unlockMode)
         : task.unlockMode;
+    const gradingMode =
+      body.gradingMode !== undefined
+        ? this.normalizeTaskGradingMode(body.gradingMode, task.gradingMode)
+        : task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+    const workMode =
+      body.workMode !== undefined
+        ? this.normalizeTaskWorkMode(body.workMode, task.workMode)
+        : task.workMode ?? TaskWorkMode.INDIVIDUAL;
+    const maxPoints =
+      body.maxPoints !== undefined
+        ? this.parseTaskAssessmentNumber(body.maxPoints, 'maxPoints')
+        : (task.maxPoints === undefined || task.maxPoints === null ? null : Number(task.maxPoints));
+    const passThreshold =
+      body.passThreshold !== undefined
+        ? this.parseTaskAssessmentNumber(body.passThreshold, 'passThreshold', { max: 100 })
+        : (task.passThreshold === undefined || task.passThreshold === null ? null : Number(task.passThreshold));
     const prerequisiteTaskId =
       body.prerequisiteTaskId !== undefined
         ? this.normalizeTaskPrerequisite(body.prerequisiteTaskId)
         : task.prerequisiteTaskId;
+    this.validateTaskGradingConfiguration(gradingMode, maxPoints, passThreshold);
 
     await this.validateTaskConfiguration(
       task.courseId,
@@ -5529,17 +6640,61 @@ export class CoursesService {
       task.completionCriteria = body.completionCriteria ?? {};
     }
 
+    if (body.gradingMode !== undefined) {
+      task.gradingMode = gradingMode;
+    }
+
+    if (body.workMode !== undefined) {
+      task.workMode = workMode;
+    }
+
+    if (body.maxPoints !== undefined) {
+      task.maxPoints = maxPoints;
+    }
+
+    if (body.passThreshold !== undefined) {
+      task.passThreshold = passThreshold;
+    }
+
+    if (body.feedbackRequired !== undefined) {
+      task.feedbackRequired = body.feedbackRequired === true;
+    }
+
+    if (body.allowRetries !== undefined) {
+      task.allowRetries = body.allowRetries === true;
+    }
+
     if (body.isPublished !== undefined) {
       task.isPublished = body.isPublished === true;
     }
 
     task.unlockMode = unlockMode;
+    task.gradingMode = gradingMode;
+    task.workMode = workMode;
+    task.maxPoints = maxPoints;
+    task.passThreshold = passThreshold;
     task.prerequisiteTaskId = prerequisiteTaskId;
     task.updatedBy = actorId;
 
     const savedTask = await this.taskRepository.save(task);
     await this.reconcileTaskProgressAfterConfigurationChange(savedTask);
     await this.refreshCourseVersionContent(savedTask.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.TASK_UPDATED,
+      actorUserId: actorId,
+      courseId: savedTask.courseId,
+      courseRunId: savedTask.courseRunId,
+      courseVersionId: savedTask.courseVersionId,
+      entityType: 'task',
+      entityId: savedTask.id,
+      summary: `Aufgabe aktualisiert: ${savedTask.title}`,
+      metadataJson: {
+        gradingMode: savedTask.gradingMode,
+        workMode: savedTask.workMode,
+        unlockMode: savedTask.unlockMode,
+        published: savedTask.isPublished,
+      },
+    });
 
     return mapLearningTaskToDto(savedTask);
   }
@@ -5600,6 +6755,19 @@ export class CoursesService {
 
     const savedTasks = await this.taskRepository.save(tasks);
     await this.refreshCourseVersionContent(version.id);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.TASK_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: currentRun.id,
+      courseVersionId: version.id,
+      entityType: 'task_sort_order',
+      entityId: normalizedCourseId,
+      summary: 'Sortierung der Aufgaben aktualisiert',
+      metadataJson: {
+        taskIds: savedTasks.map((task) => task.id),
+      },
+    });
 
     return savedTasks.sort((a, b) => a.order - b.order).map(mapLearningTaskToDto);
   }
@@ -5626,6 +6794,16 @@ export class CoursesService {
 
     await this.taskRepository.delete(id);
     await this.refreshCourseVersionContent(task.courseVersionId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.TASK_DELETED,
+      actorUserId: actorUserId === undefined ? undefined : this.toUserId(actorUserId),
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task',
+      entityId: task.id,
+      summary: `Aufgabe gelöscht: ${task.title}`,
+    });
   }
 
   async publishTask(
@@ -5660,6 +6838,11 @@ export class CoursesService {
     actorUserId?: string | number,
   ): Promise<LearningPathResponseDto> {
     const task = await this.findLearningTaskOrThrow(taskId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      return this.startGroupLearningTask(taskId, actorUserId);
+    }
+
     await this.assertTaskReadable(task, actorUserId);
     const actorId = this.requireActorUserId(actorUserId);
     const enrollment = await this.assertCurrentStudentEnrollment(
@@ -5672,6 +6855,14 @@ export class CoursesService {
       throw new ApiForbiddenError('Task is locked', 'TASK_LOCKED');
     }
 
+    if (progress.status === TaskProgressStatus.SUBMITTED) {
+      throw new ApiValidationError('Diese Aufgabe wurde bereits abgegeben und wartet auf Bewertung.');
+    }
+
+    if (progress.status === TaskProgressStatus.FAILED && task.allowRetries !== true) {
+      throw new ApiValidationError('Diese Aufgabe kann nicht erneut versucht werden.');
+    }
+
     if (
       progress.status !== TaskProgressStatus.COMPLETED &&
       progress.status !== TaskProgressStatus.IN_PROGRESS
@@ -5681,6 +6872,22 @@ export class CoursesService {
       progress.startedAt = progress.startedAt ?? new Date();
       progress.updatedBy = actorId;
       await this.taskProgressRepository.save(progress);
+      await this.recordAuditEvent({
+        eventType: AuditEventType.TASK_STARTED,
+        actorUserId: actorId,
+        actorRole: CourseMemberRole.STUDENT,
+        courseId: task.courseId,
+        courseRunId: task.courseRunId,
+        courseVersionId: task.courseVersionId,
+        entityType: 'task_progress',
+        entityId: progress.id,
+        summary: `Aufgabe gestartet: ${task.title}`,
+        metadataJson: {
+          taskId: task.id,
+          studentId: enrollment.userId,
+          status: progress.status,
+        },
+      });
     }
 
     return this.buildLearningPathForEnrollment(task.courseId, enrollment);
@@ -5694,14 +6901,42 @@ export class CoursesService {
   ): Promise<LearningPathResponseDto> {
     const task = await this.findLearningTaskOrThrow(taskId);
     const normalizedStudentId = this.toUserId(studentId);
+    const gradingMode = task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+    let actorMayManage = false;
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError(
+        'Gruppenaufgaben werden über Gruppenfortschritt und Gruppenbewertung abgeschlossen.',
+      );
+    }
 
     if (actorUserId !== undefined && actorUserId !== null) {
       const actorId = this.requireActorUserId(actorUserId);
 
       if (actorId !== normalizedStudentId) {
         await this.assertTaskManageable(task, actorId);
+        actorMayManage = true;
       } else {
         await this.assertTaskReadable(task, actorId);
+      }
+    }
+
+    if (!actorMayManage) {
+      if (!passed) {
+        throw new ApiForbiddenError(
+          'Studierende dürfen Bewertungsergebnisse nicht direkt auf nicht bestanden setzen.',
+          'TASK_ASSESSMENT_DENIED',
+        );
+      }
+
+      if (
+        gradingMode !== TaskGradingMode.NOT_GRADED &&
+        gradingMode !== TaskGradingMode.SELF_CONFIRMATION
+      ) {
+        throw new ApiForbiddenError(
+          'Diese Aufgabe muss abgegeben oder bewertet werden.',
+          'TASK_ASSESSMENT_DENIED',
+        );
       }
     }
 
@@ -5722,7 +6957,7 @@ export class CoursesService {
     if (
       passed &&
       progress.status === TaskProgressStatus.COMPLETED &&
-      progress.resultPassed === true
+      (gradingMode === TaskGradingMode.NOT_GRADED || progress.resultPassed === true)
     ) {
       await this.unlockEligibleNextTasks(task, enrollment);
       return this.buildLearningPathForEnrollment(task.courseId, enrollment);
@@ -5742,15 +6977,248 @@ export class CoursesService {
     progress.completionPercentage = passed ? 100 : 0;
     progress.startedAt = progress.startedAt ?? now;
     progress.completedAt = now;
-    progress.resultPassed = passed;
+    progress.resultPassed = gradingMode === TaskGradingMode.NOT_GRADED ? undefined : passed;
     progress.resultRecordedAt = now;
     progress.updatedBy = actorUserId ? this.toUserId(actorUserId) : 'system';
 
     await this.taskProgressRepository.save(progress);
 
+    if (gradingMode === TaskGradingMode.SELF_CONFIRMATION) {
+      const assessment = await this.ensureTaskAssessment(task, enrollment);
+      assessment.status = TaskAssessmentStatus.PASSED;
+      assessment.passed = true;
+      assessment.assessedBy = normalizedStudentId;
+      assessment.assessedAt = now;
+      await this.saveTaskAssessment(assessment);
+    }
+
     if (passed) {
       await this.unlockEligibleNextTasks(task, enrollment);
     }
+
+    await this.recordAuditEvent({
+      eventType: passed ? AuditEventType.TASK_COMPLETED : AuditEventType.TASK_FAILED,
+      actorUserId: actorUserId ? this.toUserId(actorUserId) : normalizedStudentId,
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_progress',
+      entityId: progress.id,
+      summary: `${passed ? 'Aufgabe abgeschlossen' : 'Aufgabe nicht bestanden'}: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        gradingMode,
+      },
+    });
+
+    return this.buildLearningPathForEnrollment(task.courseId, enrollment);
+  }
+
+  async selfConfirmLearningTask(
+    taskId: string,
+    actorUserId?: string | number,
+  ): Promise<LearningPathResponseDto> {
+    const task = await this.findLearningTaskOrThrow(taskId);
+    const gradingMode = task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError(
+        'Gruppenaufgaben können nicht individuell per Selbstbestätigung abgeschlossen werden.',
+      );
+    }
+
+    if (
+      gradingMode !== TaskGradingMode.NOT_GRADED &&
+      gradingMode !== TaskGradingMode.SELF_CONFIRMATION
+    ) {
+      throw new ApiForbiddenError(
+        'Diese Aufgabe darf nicht per Selbstbestätigung abgeschlossen werden.',
+        'TASK_ASSESSMENT_DENIED',
+      );
+    }
+
+    const actorId = this.requireActorUserId(actorUserId);
+
+    return this.recordTaskResult(actorId, taskId, true, actorId);
+  }
+
+  async submitLearningTask(
+    taskId: string,
+    body: SubmitLearningTaskDto = {},
+    actorUserId?: string | number,
+  ): Promise<LearningPathResponseDto> {
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      return this.submitGroupLearningTask(taskId, body, actorUserId);
+    }
+
+    await this.assertTaskReadable(task, actorUserId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const enrollment = await this.assertCurrentStudentEnrollment(task.courseId, actorId);
+    const gradingMode = task.gradingMode ?? TaskGradingMode.NOT_GRADED;
+
+    if (gradingMode === TaskGradingMode.AUTOMATIC_MOCK) {
+      return this.mockEvaluateLearningTask(taskId, {
+        submissionData: body.submissionData,
+      }, actorId);
+    }
+
+    if (gradingMode !== TaskGradingMode.MANUAL) {
+      throw new ApiValidationError(
+        'Nur manuell bewertete Aufgaben werden abgegeben. Nutze bei dieser Aufgabe die passende Abschlussaktion.',
+      );
+    }
+
+    const progress = await this.ensureTaskProgress(task, enrollment, actorId);
+
+    if (progress.status === TaskProgressStatus.LOCKED) {
+      throw new ApiForbiddenError('Task is locked', 'TASK_LOCKED');
+    }
+
+    if (
+      (progress.status === TaskProgressStatus.COMPLETED ||
+        progress.status === TaskProgressStatus.FAILED) &&
+      task.allowRetries !== true
+    ) {
+      throw new ApiValidationError('Diese Aufgabe kann nicht erneut abgegeben werden.');
+    }
+
+    const assessment = await this.ensureTaskAssessment(task, enrollment);
+    assessment.status = TaskAssessmentStatus.PENDING_REVIEW;
+    assessment.passed = null;
+    assessment.points = null;
+    assessment.feedback = null;
+    assessment.submissionData = body.submissionData ?? {};
+    assessment.assessedBy = null;
+    assessment.assessedAt = null;
+    await this.saveTaskAssessment(assessment);
+    await this.applyAssessmentToProgress(task, enrollment, assessment, actorId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.ASSESSMENT_SUBMITTED,
+      actorUserId: actorId,
+      actorRole: CourseMemberRole.STUDENT,
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_assessment',
+      entityId: assessment.id,
+      summary: `Aufgabe abgegeben: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        status: assessment.status,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: AuditEventType.TASK_SUBMITTED,
+      actorUserId: actorId,
+      actorRole: CourseMemberRole.STUDENT,
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_progress',
+      entityId: task.id,
+      summary: `Aufgabe wartet auf Bewertung: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+      },
+    });
+
+    return this.buildLearningPathForEnrollment(task.courseId, enrollment);
+  }
+
+  async mockEvaluateLearningTask(
+    taskId: string,
+    body: MockEvaluateLearningTaskDto = {},
+    actorUserId?: string | number,
+  ): Promise<LearningPathResponseDto> {
+    const task = await this.findLearningTaskOrThrow(taskId);
+    await this.assertTaskReadable(task, actorUserId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const enrollment = await this.assertCurrentStudentEnrollment(task.courseId, actorId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError(
+        'Automatische Gruppenbewertung ist in dieser Mini-Version nicht aktiv. Bitte manuell bewerten.',
+      );
+    }
+
+    if ((task.gradingMode ?? TaskGradingMode.NOT_GRADED) !== TaskGradingMode.AUTOMATIC_MOCK) {
+      throw new ApiValidationError('Diese Aufgabe ist nicht automatisch bewertet.');
+    }
+
+    const progress = await this.ensureTaskProgress(task, enrollment, actorId);
+
+    if (progress.status === TaskProgressStatus.LOCKED) {
+      throw new ApiForbiddenError('Task is locked', 'TASK_LOCKED');
+    }
+
+    if (
+      (progress.status === TaskProgressStatus.COMPLETED ||
+        progress.status === TaskProgressStatus.FAILED) &&
+      task.allowRetries !== true
+    ) {
+      throw new ApiValidationError('Diese Aufgabe kann nicht erneut abgegeben werden.');
+    }
+
+    const submissionData = {
+      ...(body.submissionData ?? {}),
+      ...(body.passed !== undefined ? { passed: body.passed } : {}),
+    };
+    const result = await this.taskEvaluationProvider.evaluateSubmission({
+      task,
+      studentId: enrollment.userId,
+      submissionData,
+    });
+    const assessment = await this.ensureTaskAssessment(task, enrollment);
+    assessment.status = TaskAssessmentStatus.AUTO_EVALUATED;
+    assessment.points = result.points;
+    assessment.maxPoints = result.maxPoints;
+    assessment.passThreshold = task.passThreshold ?? TASK_PASS_THRESHOLD_PERCENT;
+    assessment.passed = result.passed;
+    assessment.feedback = result.feedback;
+    assessment.submissionData = submissionData;
+    assessment.assessedBy = 'mock-task-evaluation-provider';
+    assessment.assessedAt = new Date();
+    await this.saveTaskAssessment(assessment);
+    await this.applyAssessmentToProgress(task, enrollment, assessment, actorId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.ASSESSMENT_AUTO_EVALUATED,
+      actorUserId: actorId,
+      actorRole: CourseMemberRole.STUDENT,
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_assessment',
+      entityId: assessment.id,
+      summary: `Aufgabe automatisch bewertet: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        points: assessment.points,
+        maxPoints: assessment.maxPoints,
+        passed: assessment.passed,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: assessment.passed ? AuditEventType.TASK_COMPLETED : AuditEventType.TASK_FAILED,
+      actorUserId: actorId,
+      actorRole: CourseMemberRole.STUDENT,
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_progress',
+      entityId: task.id,
+      summary: `${assessment.passed ? 'Aufgabe abgeschlossen' : 'Aufgabe nicht bestanden'}: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        gradingMode: task.gradingMode,
+      },
+    });
 
     return this.buildLearningPathForEnrollment(task.courseId, enrollment);
   }
@@ -5759,8 +7227,7 @@ export class CoursesService {
     taskId: string,
     actorUserId?: string | number,
   ): Promise<LearningPathResponseDto> {
-    const actorId = this.requireActorUserId(actorUserId);
-    return this.recordTaskResult(actorId, taskId, true, actorId);
+    return this.selfConfirmLearningTask(taskId, actorUserId);
   }
 
   async failLearningTask(
@@ -5768,7 +7235,278 @@ export class CoursesService {
     actorUserId?: string | number,
   ): Promise<LearningPathResponseDto> {
     const actorId = this.requireActorUserId(actorUserId);
+    const task = await this.findLearningTaskOrThrow(taskId);
+    await this.assertTaskManageable(task, actorId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError(
+        'Gruppenaufgaben werden über Gruppenbewertungen als nicht bestanden markiert.',
+      );
+    }
+
     return this.recordTaskResult(actorId, taskId, false, actorId);
+  }
+
+  async setManualTaskAssessment(
+    courseId: string | number,
+    runId: string,
+    taskId: string,
+    studentId: string | number,
+    body: ManualTaskAssessmentDto,
+    actorUserId?: string | number,
+  ): Promise<TaskAssessmentResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const activeVersion = await this.getActiveCourseVersionForRunOrThrow(
+      normalizedCourseId,
+      run.id,
+    );
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if (
+      task.courseId !== normalizedCourseId ||
+      task.courseRunId !== run.id ||
+      task.courseVersionId !== activeVersion.id
+    ) {
+      throw new ApiValidationError(
+        'Die Aufgabe gehört nicht zur aktiven Inhaltsversion dieses Kursdurchlaufs.',
+      );
+    }
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError('Gruppenaufgaben müssen als Gruppe bewertet werden.');
+    }
+
+    if ((task.gradingMode ?? TaskGradingMode.NOT_GRADED) !== TaskGradingMode.MANUAL) {
+      throw new ApiValidationError('Nur manuell bewertete Aufgaben können manuell bewertet werden.');
+    }
+
+    const enrollment = await this.findStudentEnrollmentForRunOrThrow(
+      normalizedCourseId,
+      studentId,
+      run.id,
+    );
+    const maxPoints = body.maxPoints !== undefined
+      ? this.parseTaskAssessmentNumber(body.maxPoints, 'maxPoints', { required: true })
+      : this.parseTaskAssessmentNumber(task.maxPoints, 'maxPoints', { required: true });
+    const points = body.points !== undefined
+      ? this.parseTaskAssessmentNumber(body.points, 'points', {
+        required: true,
+        max: maxPoints ?? undefined,
+      })
+      : null;
+    const passThreshold = task.passThreshold ?? TASK_PASS_THRESHOLD_PERCENT;
+    const calculatedPassed = points !== null
+      ? calculateTaskAssessmentPassed(points, maxPoints, passThreshold)
+      : null;
+    const passed = body.passed ?? calculatedPassed;
+
+    if (passed === null || passed === undefined) {
+      throw new ApiValidationError('Eine manuelle Bewertung benötigt bestanden/nicht bestanden oder Punkte.');
+    }
+
+    const assessment = await this.ensureTaskAssessment(task, enrollment);
+    assessment.status = passed ? TaskAssessmentStatus.PASSED : TaskAssessmentStatus.FAILED;
+    assessment.points = points;
+    assessment.maxPoints = maxPoints;
+    assessment.passThreshold = passThreshold;
+    assessment.passed = passed;
+    assessment.feedback = body.feedback === undefined || body.feedback === null
+      ? null
+      : String(body.feedback).trim();
+    assessment.assessedBy = actorId;
+    assessment.assessedAt = new Date();
+    await this.saveTaskAssessment(assessment);
+    await this.applyAssessmentToProgress(task, enrollment, assessment, actorId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.ASSESSMENT_MANUALLY_GRADED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_assessment',
+      entityId: assessment.id,
+      summary: `Aufgabe manuell bewertet: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        points: assessment.points,
+        maxPoints: assessment.maxPoints,
+        passed: assessment.passed,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: passed ? AuditEventType.TASK_COMPLETED : AuditEventType.TASK_FAILED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_progress',
+      entityId: task.id,
+      summary: `${passed ? 'Aufgabe bestanden' : 'Aufgabe nicht bestanden'}: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+      },
+    });
+
+    return mapTaskAssessmentToDto(assessment);
+  }
+
+  async resetTaskAssessment(
+    courseId: string | number,
+    runId: string,
+    taskId: string,
+    studentId: string | number,
+    actorUserId?: string | number,
+  ): Promise<TaskAssessmentResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const activeVersion = await this.getActiveCourseVersionForRunOrThrow(
+      normalizedCourseId,
+      run.id,
+    );
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if (
+      task.courseId !== normalizedCourseId ||
+      task.courseRunId !== run.id ||
+      task.courseVersionId !== activeVersion.id
+    ) {
+      throw new ApiValidationError(
+        'Die Aufgabe gehört nicht zur aktiven Inhaltsversion dieses Kursdurchlaufs.',
+      );
+    }
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError('Gruppenbewertungen müssen in der Gruppenansicht zurückgesetzt werden.');
+    }
+
+    if ((task.gradingMode ?? TaskGradingMode.NOT_GRADED) !== TaskGradingMode.MANUAL) {
+      throw new ApiValidationError('Nur manuell bewertete Aufgaben können zurückgesetzt werden.');
+    }
+
+    const enrollment = await this.findStudentEnrollmentForRunOrThrow(
+      normalizedCourseId,
+      studentId,
+      run.id,
+    );
+    const assessment = await this.findTaskAssessment(task, enrollment.userId);
+
+    if (!assessment) {
+      throw new ApiValidationError('Für diese Aufgabe liegt noch keine Bewertung vor.');
+    }
+
+    assessment.status = assessment.submissionData
+      ? TaskAssessmentStatus.PENDING_REVIEW
+      : TaskAssessmentStatus.NOT_SUBMITTED;
+    assessment.points = null;
+    assessment.passed = null;
+    assessment.feedback = null;
+    assessment.assessedBy = null;
+    assessment.assessedAt = null;
+    await this.saveTaskAssessment(assessment);
+
+    const progress = await this.ensureTaskProgress(task, enrollment, actorId);
+    const now = new Date();
+    progress.status = assessment.submissionData
+      ? TaskProgressStatus.SUBMITTED
+      : TaskProgressStatus.IN_PROGRESS;
+    progress.completionPercentage = assessment.submissionData ? 75 : 50;
+    progress.startedAt = progress.startedAt ?? now;
+    progress.completedAt = undefined;
+    progress.resultPassed = undefined;
+    progress.resultRecordedAt = undefined;
+    progress.updatedBy = actorId;
+    await this.taskProgressRepository.save(progress);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.ASSESSMENT_RESET,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_assessment',
+      entityId: assessment.id,
+      summary: `Bewertung zurückgesetzt: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        status: assessment.status,
+      },
+    });
+    await this.recordAuditEvent({
+      eventType: AuditEventType.PROGRESS_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_progress',
+      entityId: progress.id,
+      summary: `Fortschritt nach Bewertungsreset aktualisiert: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        studentId: enrollment.userId,
+        status: progress.status,
+      },
+    });
+
+    return mapTaskAssessmentToDto(assessment);
+  }
+
+  async listTaskAssessmentsByRun(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<TaskAssessmentResponseDto[]> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.assertCourseRunManageable(
+      normalizedCourseId,
+      runId,
+      actorUserId,
+    );
+    const assessments = await this.taskAssessmentRepository.find({
+      where: {
+        courseRunId: run.id,
+      },
+      order: {
+        updatedAt: 'DESC',
+      },
+    });
+
+    return assessments.map(mapTaskAssessmentToDto);
+  }
+
+  async listTaskAssessmentsByTask(
+    courseId: string | number,
+    runId: string,
+    taskId: string,
+    actorUserId?: string | number,
+  ): Promise<TaskAssessmentResponseDto[]> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.assertCourseRunManageable(
+      normalizedCourseId,
+      runId,
+      actorUserId,
+    );
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if (task.courseId !== normalizedCourseId || task.courseRunId !== run.id) {
+      throw new ApiValidationError('Die Aufgabe gehört nicht zu diesem Kursdurchlauf.');
+    }
+
+    const assessments = await this.taskAssessmentRepository.find({
+      where: {
+        courseRunId: run.id,
+        taskId,
+      },
+      order: {
+        updatedAt: 'DESC',
+      },
+    });
+
+    return assessments.map(mapTaskAssessmentToDto);
   }
 
   async manuallyUnlockLearningTask(
@@ -5785,6 +7523,13 @@ export class CoursesService {
 
     const task = await this.findLearningTaskOrThrow(taskId);
     await this.assertTaskManageable(task, actorId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) === TaskWorkMode.GROUP) {
+      throw new ApiValidationError(
+        'Gruppenaufgaben werden über die Gruppe freigeschaltet und bearbeitet.',
+      );
+    }
+
     const enrollment = await this.findStudentEnrollmentOrThrow(
       task.courseId,
       studentId,
@@ -5802,6 +7547,22 @@ export class CoursesService {
       progress.unlockSource = TaskUnlockSource.MANUAL;
       progress.updatedBy = actorId;
       await this.taskProgressRepository.save(progress);
+      await this.recordAuditEvent({
+        eventType: AuditEventType.PROGRESS_UPDATED,
+        actorUserId: actorId,
+        courseId: task.courseId,
+        courseRunId: task.courseRunId,
+        courseVersionId: task.courseVersionId,
+        entityType: 'task_progress',
+        entityId: progress.id,
+        summary: `Aufgabe manuell freigeschaltet: ${task.title}`,
+        metadataJson: {
+          taskId: task.id,
+          studentId: enrollment.userId,
+          status: progress.status,
+          unlockSource: progress.unlockSource,
+        },
+      });
     }
 
     return this.buildStudentProgressOverview(task.courseId, enrollment);
@@ -5881,6 +7642,519 @@ export class CoursesService {
       normalizedCourseId,
       run.id,
     );
+  }
+
+  async createStudyGroup(
+    courseId: string | number,
+    runId: string,
+    body: CreateStudyGroupDto,
+    actorUserId?: string | number,
+  ): Promise<StudyGroupResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const group = new CourseGroup();
+    group.course_id = normalizedCourseId;
+    group.course_run_id = run.id;
+    group.name = this.normalizeStudyGroupName(body?.name);
+    group.description = this.normalizeStudyGroupDescription(body?.description);
+    group.group_type = 'WORKGROUP' as any;
+    group.is_active = true;
+    group.created_by = actorId;
+    group.updated_by = actorId;
+
+    const savedGroup = await this.courseGroupRepository.save(group);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.PROGRESS_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      entityType: 'study_group',
+      entityId: savedGroup.id,
+      summary: `Gruppe erstellt: ${savedGroup.name}`,
+    });
+
+    return mapStudyGroupToDto({ ...savedGroup, memberships: [] } as CourseGroup);
+  }
+
+  async listStudyGroups(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<StudyGroupResponseDto[]> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.assertCourseRunManageable(
+      normalizedCourseId,
+      runId,
+      actorUserId,
+    );
+    const groups = await this.courseGroupRepository.find({
+      where: {
+        course_id: normalizedCourseId,
+        course_run_id: run.id,
+      },
+      relations: ['memberships'],
+      order: { name: 'ASC' },
+    });
+    const dtos: StudyGroupResponseDto[] = [];
+
+    for (const group of groups) {
+      dtos.push(mapStudyGroupToDto(group, await this.loadGroupTaskProgressDtos(group)));
+    }
+
+    return dtos;
+  }
+
+  async getMyStudyGroup(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<StudyGroupResponseDto | null> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCourseRunReadable(normalizedCourseId, runId, actorId);
+    await this.findStudentEnrollmentForRunOrThrow(normalizedCourseId, actorId, runId);
+    const group = await this.findStudentStudyGroupInRun(runId, actorId);
+
+    if (!group || group.course_id !== normalizedCourseId) {
+      return null;
+    }
+
+    return mapStudyGroupToDto(group, await this.loadGroupTaskProgressDtos(group));
+  }
+
+  async updateStudyGroup(
+    courseId: string | number,
+    runId: string,
+    groupId: string,
+    body: UpdateStudyGroupDto,
+    actorUserId?: string | number,
+  ): Promise<StudyGroupResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const group = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      groupId,
+      ['memberships'],
+    );
+
+    if (body.name !== undefined) {
+      group.name = this.normalizeStudyGroupName(body.name);
+    }
+
+    if (body.description !== undefined) {
+      group.description = this.normalizeStudyGroupDescription(body.description);
+    }
+
+    group.updated_by = actorId;
+    const savedGroup = await this.courseGroupRepository.save(group);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.PROGRESS_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      entityType: 'study_group',
+      entityId: savedGroup.id,
+      summary: `Gruppe aktualisiert: ${savedGroup.name}`,
+    });
+
+    return mapStudyGroupToDto(savedGroup, await this.loadGroupTaskProgressDtos(savedGroup));
+  }
+
+  async deleteStudyGroup(
+    courseId: string | number,
+    runId: string,
+    groupId: string,
+    actorUserId?: string | number,
+  ): Promise<void> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const group = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      groupId,
+      ['memberships'],
+    );
+    const [progress, assessments] = await Promise.all([
+      this.getGroupTaskProgressRepository().find({
+        where: { courseRunId: run.id, groupId: group.id },
+      }),
+      this.taskAssessmentRepository.find({
+        where: {
+          courseRunId: run.id,
+          assessmentTargetType: TaskAssessmentTargetType.GROUP,
+          groupId: group.id,
+        },
+      }),
+    ]);
+
+    if (progress.length > 0 || assessments.length > 0) {
+      throw new ApiValidationError(
+        'Diese Gruppe kann nicht gelöscht werden, da bereits Fortschritt oder Bewertungen vorhanden sind.',
+      );
+    }
+
+    await this.courseGroupRepository.delete(group.id);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.PROGRESS_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      entityType: 'study_group',
+      entityId: group.id,
+      summary: `Gruppe gelöscht: ${group.name}`,
+    });
+  }
+
+  async addStudyGroupMember(
+    courseId: string | number,
+    runId: string,
+    groupId: string,
+    body: AddStudyGroupMemberDto,
+    actorUserId?: string | number,
+  ): Promise<StudyGroupResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const studentId = body?.studentId;
+
+    if (studentId === undefined || studentId === null || studentId === '') {
+      throw new ApiValidationError('Student ID is required');
+    }
+
+    const group = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      groupId,
+      ['memberships'],
+    );
+    await this.findStudentEnrollmentForRunOrThrow(normalizedCourseId, studentId, run.id);
+    const existingGroup = await this.findStudentStudyGroupInRun(run.id, studentId);
+
+    if (existingGroup && existingGroup.id !== group.id) {
+      throw new ApiValidationError(
+        'Ein Studierender kann in einem Kursdurchlauf nur einer Gruppe angehören.',
+      );
+    }
+
+    if (!group.memberships?.some((membership) => membership.user_id === this.toUserId(studentId))) {
+      const membership = new GroupMembership();
+      membership.group_id = group.id;
+      membership.group = group;
+      membership.user_id = this.toUserId(studentId);
+      membership.role = MembershipRole.MEMBER;
+      membership.joined_at = new Date();
+      membership.left_at = null;
+      membership.added_by = actorId;
+      const savedMembership = await this.groupMembershipRepository.save(membership);
+      group.memberships = [...(group.memberships ?? []), savedMembership];
+    }
+
+    const updatedGroup = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      group.id,
+      ['memberships'],
+    );
+    await this.recordAuditEvent({
+      eventType: AuditEventType.PROGRESS_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      entityType: 'study_group_member',
+      entityId: group.id,
+      summary: `Studierende:r ${this.toUserId(studentId)} Gruppe ${group.name} zugeordnet`,
+      metadataJson: { studentId: this.toUserId(studentId) },
+    });
+
+    return mapStudyGroupToDto(updatedGroup, await this.loadGroupTaskProgressDtos(updatedGroup));
+  }
+
+  async removeStudyGroupMember(
+    courseId: string | number,
+    runId: string,
+    groupId: string,
+    studentId: string | number,
+    actorUserId?: string | number,
+  ): Promise<StudyGroupResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const group = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      groupId,
+      ['memberships'],
+    );
+    await this.groupMembershipRepository.delete({
+      group_id: group.id,
+      user_id: this.toUserId(studentId),
+    });
+    group.memberships = (group.memberships ?? []).filter(
+      (membership) => membership.user_id !== this.toUserId(studentId),
+    );
+    const updatedGroup = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      group.id,
+      ['memberships'],
+    );
+    await this.recordAuditEvent({
+      eventType: AuditEventType.PROGRESS_UPDATED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      entityType: 'study_group_member',
+      entityId: group.id,
+      summary: `Studierende:r ${this.toUserId(studentId)} aus Gruppe ${group.name} entfernt`,
+      metadataJson: { studentId: this.toUserId(studentId) },
+    });
+
+    return mapStudyGroupToDto(updatedGroup, await this.loadGroupTaskProgressDtos(updatedGroup));
+  }
+
+  async startGroupLearningTask(
+    taskId: string,
+    actorUserId?: string | number,
+  ): Promise<LearningPathResponseDto> {
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) !== TaskWorkMode.GROUP) {
+      return this.startLearningTask(taskId, actorUserId);
+    }
+
+    await this.assertTaskReadable(task, actorUserId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const enrollment = await this.findStudentEnrollmentForRunOrThrow(
+      task.courseId,
+      actorId,
+      task.courseRunId,
+    );
+    const group = await this.assertStudentStudyGroupInRun(task.courseId, task.courseRunId, actorId);
+    const memberProgress = await this.ensureTaskProgress(task, enrollment, actorId);
+
+    if (memberProgress.status === TaskProgressStatus.LOCKED) {
+      throw new ApiForbiddenError('Task is locked', 'TASK_LOCKED');
+    }
+
+    const groupProgress = await this.ensureGroupTaskProgress(task, group, actorId);
+
+    if (groupProgress.status === TaskProgressStatus.SUBMITTED) {
+      throw new ApiValidationError('Diese Gruppenaufgabe wurde bereits abgegeben und wartet auf Bewertung.');
+    }
+
+    if (groupProgress.status === TaskProgressStatus.FAILED && task.allowRetries !== true) {
+      throw new ApiValidationError('Diese Gruppenaufgabe kann nicht erneut versucht werden.');
+    }
+
+    if (
+      groupProgress.status !== TaskProgressStatus.COMPLETED &&
+      groupProgress.status !== TaskProgressStatus.IN_PROGRESS
+    ) {
+      groupProgress.status = TaskProgressStatus.IN_PROGRESS;
+      groupProgress.startedAt = groupProgress.startedAt ?? new Date();
+      groupProgress.updatedBy = actorId;
+      const savedProgress = await this.getGroupTaskProgressRepository().save(groupProgress);
+      await this.applyGroupProgressToMembers(task, group, savedProgress, null, actorId);
+      await this.recordAuditEvent({
+        eventType: AuditEventType.TASK_STARTED,
+        actorUserId: actorId,
+        actorRole: CourseMemberRole.STUDENT,
+        courseId: task.courseId,
+        courseRunId: task.courseRunId,
+        courseVersionId: task.courseVersionId,
+        entityType: 'group_task_progress',
+        entityId: savedProgress.id,
+        summary: `Gruppenaufgabe gestartet: ${task.title}`,
+        metadataJson: {
+          taskId: task.id,
+          groupId: group.id,
+        },
+      });
+    }
+
+    return this.buildLearningPathForEnrollment(task.courseId, enrollment);
+  }
+
+  async submitGroupLearningTask(
+    taskId: string,
+    body: SubmitLearningTaskDto = {},
+    actorUserId?: string | number,
+  ): Promise<LearningPathResponseDto> {
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) !== TaskWorkMode.GROUP) {
+      return this.submitLearningTask(taskId, body, actorUserId);
+    }
+
+    await this.assertTaskReadable(task, actorUserId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const enrollment = await this.findStudentEnrollmentForRunOrThrow(
+      task.courseId,
+      actorId,
+      task.courseRunId,
+    );
+    const group = await this.assertStudentStudyGroupInRun(task.courseId, task.courseRunId, actorId);
+
+    if ((task.gradingMode ?? TaskGradingMode.NOT_GRADED) !== TaskGradingMode.MANUAL) {
+      throw new ApiValidationError('Gruppenaufgaben werden in dieser Mini-Version manuell bewertet.');
+    }
+
+    const memberProgress = await this.ensureTaskProgress(task, enrollment, actorId);
+
+    if (memberProgress.status === TaskProgressStatus.LOCKED) {
+      throw new ApiForbiddenError('Task is locked', 'TASK_LOCKED');
+    }
+
+    const groupProgress = await this.ensureGroupTaskProgress(task, group, actorId);
+
+    if (
+      (groupProgress.status === TaskProgressStatus.COMPLETED ||
+        groupProgress.status === TaskProgressStatus.FAILED) &&
+      task.allowRetries !== true
+    ) {
+      throw new ApiValidationError('Diese Gruppenaufgabe kann nicht erneut abgegeben werden.');
+    }
+
+    const assessment = await this.ensureGroupTaskAssessment(task, group);
+    assessment.status = TaskAssessmentStatus.PENDING_REVIEW;
+    assessment.passed = null;
+    assessment.points = null;
+    assessment.feedback = null;
+    assessment.submissionData = body.submissionData ?? {};
+    assessment.assessedBy = null;
+    assessment.assessedAt = null;
+    await this.saveTaskAssessment(assessment);
+
+    groupProgress.status = TaskProgressStatus.SUBMITTED;
+    groupProgress.startedAt = groupProgress.startedAt ?? new Date();
+    groupProgress.submittedAt = new Date();
+    groupProgress.completedAt = null;
+    groupProgress.progressData = body.submissionData ?? {};
+    groupProgress.updatedBy = actorId;
+    const savedProgress = await this.getGroupTaskProgressRepository().save(groupProgress);
+    await this.applyGroupProgressToMembers(task, group, savedProgress, assessment, actorId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.ASSESSMENT_SUBMITTED,
+      actorUserId: actorId,
+      actorRole: CourseMemberRole.STUDENT,
+      courseId: task.courseId,
+      courseRunId: task.courseRunId,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_assessment',
+      entityId: assessment.id,
+      summary: `Gruppenaufgabe abgegeben: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        groupId: group.id,
+      },
+    });
+
+    return this.buildLearningPathForEnrollment(task.courseId, enrollment);
+  }
+
+  async setManualGroupTaskAssessment(
+    courseId: string | number,
+    runId: string,
+    taskId: string,
+    groupId: string,
+    body: ManualGroupTaskAssessmentDto,
+    actorUserId?: string | number,
+  ): Promise<TaskAssessmentResponseDto> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(normalizedCourseId, runId, actorId);
+    const activeVersion = await this.getActiveCourseVersionForRunOrThrow(
+      normalizedCourseId,
+      run.id,
+    );
+    const task = await this.findLearningTaskOrThrow(taskId);
+
+    if (
+      task.courseId !== normalizedCourseId ||
+      task.courseRunId !== run.id ||
+      task.courseVersionId !== activeVersion.id
+    ) {
+      throw new ApiValidationError(
+        'Die Aufgabe gehört nicht zur aktiven Inhaltsversion dieses Kursdurchlaufs.',
+      );
+    }
+
+    if ((task.workMode ?? TaskWorkMode.INDIVIDUAL) !== TaskWorkMode.GROUP) {
+      throw new ApiValidationError('Nur Gruppenaufgaben können als Gruppe bewertet werden.');
+    }
+
+    if ((task.gradingMode ?? TaskGradingMode.NOT_GRADED) !== TaskGradingMode.MANUAL) {
+      throw new ApiValidationError('Nur manuell bewertete Aufgaben können manuell bewertet werden.');
+    }
+
+    const group = await this.findStudyGroupInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      groupId,
+      ['memberships'],
+    );
+    const maxPoints = body.maxPoints !== undefined
+      ? this.parseTaskAssessmentNumber(body.maxPoints, 'maxPoints', { required: true })
+      : this.parseTaskAssessmentNumber(task.maxPoints, 'maxPoints', { required: true });
+    const points = body.points !== undefined
+      ? this.parseTaskAssessmentNumber(body.points, 'points', {
+        required: true,
+        max: maxPoints ?? undefined,
+      })
+      : null;
+    const passThreshold = task.passThreshold ?? TASK_PASS_THRESHOLD_PERCENT;
+    const calculatedPassed = points !== null
+      ? calculateTaskAssessmentPassed(points, maxPoints, passThreshold)
+      : null;
+    const passed = body.passed ?? calculatedPassed;
+
+    if (passed === null || passed === undefined) {
+      throw new ApiValidationError('Eine manuelle Gruppenbewertung benötigt bestanden/nicht bestanden oder Punkte.');
+    }
+
+    const assessment = await this.ensureGroupTaskAssessment(task, group);
+    assessment.status = passed ? TaskAssessmentStatus.PASSED : TaskAssessmentStatus.FAILED;
+    assessment.points = points;
+    assessment.maxPoints = maxPoints;
+    assessment.passThreshold = passThreshold;
+    assessment.passed = passed;
+    assessment.feedback = body.feedback === undefined || body.feedback === null
+      ? null
+      : String(body.feedback).trim();
+    assessment.assessedBy = actorId;
+    assessment.assessedAt = new Date();
+    await this.saveTaskAssessment(assessment);
+
+    const groupProgress = await this.ensureGroupTaskProgress(task, group, actorId);
+    groupProgress.status = passed ? TaskProgressStatus.COMPLETED : TaskProgressStatus.FAILED;
+    groupProgress.startedAt = groupProgress.startedAt ?? new Date();
+    groupProgress.completedAt = new Date();
+    groupProgress.updatedBy = actorId;
+    const savedProgress = await this.getGroupTaskProgressRepository().save(groupProgress);
+    await this.applyGroupProgressToMembers(task, group, savedProgress, assessment, actorId);
+    await this.recordAuditEvent({
+      eventType: AuditEventType.ASSESSMENT_MANUALLY_GRADED,
+      actorUserId: actorId,
+      courseId: normalizedCourseId,
+      courseRunId: run.id,
+      courseVersionId: task.courseVersionId,
+      entityType: 'task_assessment',
+      entityId: assessment.id,
+      summary: `Gruppenaufgabe bewertet: ${task.title}`,
+      metadataJson: {
+        taskId: task.id,
+        groupId: group.id,
+        points: assessment.points,
+        maxPoints: assessment.maxPoints,
+        passed: assessment.passed,
+      },
+    });
+
+    return mapTaskAssessmentToDto(assessment);
   }
 
   // Content Release methods

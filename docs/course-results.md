@@ -1,51 +1,62 @@
-# Bewertungen und Noten
+# Bewertungen
 
-Der Course Service speichert Kursergebnisse pro Kurs und studentischer
-Einschreibung in `course_result`. Einzelne Assignment-Bewertungen bleiben in
-`grade`; das Kursergebnis ist eine aggregierte fachliche Sicht.
+Das Mini-Projekt verwendet ein einheitliches Bewertungssystem:
+`TaskAssessment`.
 
-## Bestehensregel
+## Fachliche Trennung
 
-Die zentrale Regel steht in `apps/backend/src/course-result.rules.ts`:
+- Aufgaben definieren die Bewertungsregeln: `gradingMode`, `maxPoints`,
+  `passThreshold`, `feedbackRequired` und `allowRetries`.
+- `TaskAssessment` speichert das konkrete Bewertungsergebnis eines Studenten
+  fuer eine Aufgabe in einem CourseRun und einer CourseVersion.
+- Der Lernfortschritt bleibt getrennt und beschreibt nur den Bearbeitungsstand:
+  `LOCKED`, `AVAILABLE`, `IN_PROGRESS`, `SUBMITTED`, `COMPLETED`, `FAILED`.
+- Bewertungsergebnisse aktualisieren den Lernfortschritt, zum Beispiel:
+  manuell bestanden -> `COMPLETED`, manuell nicht bestanden -> `FAILED`,
+  abgegeben aber nicht bewertet -> `SUBMITTED`.
 
-- Grenzwert: `COURSE_PASSING_THRESHOLD_PERCENT = 50`
-- Vergleich: bestanden ist nur, wer mehr als 50 Prozent erreicht.
-- Exakt 50 Prozent oder weniger ist nicht bestanden.
+## Reiter Bewertungen
 
-## Bewertungsquellen
+Der Reiter `Bewertungen` ist keine zweite Bewertungslogik. Er ist eine
+Teacher-/Admin-Ansicht auf dieselben `TaskAssessment`-Daten, die auch in der
+Aufgabenansicht verwendet werden.
 
-`CourseResultSource` unterscheidet die Herkunft:
+Lehrende sehen dort:
 
-- `MANUAL_ENTRY`: manuell eingetragen, ohne vorherige automatische Bewertung
-- `AUTOMATIC_CALCULATION`: automatisch aus finalen Assignment-Punkten berechnet
-- `MANUAL_OVERRIDE`: automatische oder bereits überschreibende Bewertung wurde
-  bewusst manuell überschrieben
+- Aufgaben eines Kursdurchlaufs
+- Studierende des Kursdurchlaufs
+- offene manuelle Abgaben
+- bestandene und nicht bestandene Aufgaben
+- Punkte und Feedback
+- Lernfortschritt je Aufgabe
 
-`sourceDetails` dokumentiert die Quelle, die verwendete Regel und bei
-automatischen Berechnungen die einbezogenen Assignments.
+Manuelle Bewertungen werden ueber dieselben Assessment-Endpunkte gespeichert
+wie in der Aufgabenansicht. Danach ist das Ergebnis in beiden Ansichten
+sichtbar.
 
-## Automatische Berechnung
+## Aktive API
 
-Die automatische Berechnung verwendet vorhandene Daten im Course Service:
+- `GET /api/courses/:courseId/runs/:runId/assessments`
+- `GET /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments`
+- `POST /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments/:studentId/manual`
+- `POST /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments/:studentId/reset`
 
-- alle Assignments des Kurses mit `isGraded = true`
-- pro Studierendem nur finale Einzelbewertungen (`grade.isFinal = true`)
-- fehlende finale Einzelbewertungen zählen mit 0 erreichten Punkten
-- die maximale Gesamtpunktzahl ist die Summe der maximalen Punkte aller
-  bewerteten Assignments
+Studentische Aktionen laufen ebenfalls ueber Aufgaben-Endpunkte und schreiben
+`TaskAssessment`, wenn der Bewertungsmodus dies vorsieht:
 
-Es gibt keinen direkten Zugriff auf Datenbanken anderer Services und keinen
-hypothetischen Aufgabenservice. Falls Aufgabenpunkte später aus einem anderen
-Service kommen, muss die Berechnung über eine API-Grenze angebunden werden. Der
-Course Service sollte dann nur fachlich notwendige Ergebnisdaten und
-Quellreferenzen speichern.
+- `POST /api/courses/tasks/:id/self-confirm`
+- `POST /api/courses/tasks/:id/submit`
+- `POST /api/courses/tasks/:id/mock-evaluate`
 
-Wenn keine maximale Punktzahl vorhanden ist, wird keine Division durchgeführt.
-Der Prozentwert bleibt leer und der Status ist `NOT_ASSESSED`.
+## Mock-Bewertung
 
-## Neuberechnung
+Der Mock-Aufgabenservice ist ueber `TaskEvaluationProvider` gekapselt und
+schreibt normale `TaskAssessment`-Eintraege. Er erzeugt keine separate
+Bewertungsstruktur.
 
-Lehrende können ein einzelnes Kursergebnis oder alle Kursergebnisse eines
-Kurses neu berechnen. Eine automatische Neuberechnung ersetzt den bisherigen
-Kursergebnisstand durch eine neue automatische Bewertung. Eine spätere manuelle
-Eingabe wird als `MANUAL_OVERRIDE` dokumentiert.
+## Zukuenftige Gesamtnoten
+
+Falls spaeter eine Gesamtnote oder ein Kursergebnis benoetigt wird, muss diese
+fachlich als separate Aggregation aus Aufgabenbewertungen modelliert werden.
+Im aktuellen Mini-Projekt ist `TaskAssessment` die zentrale und einzige aktive
+Bewertungsquelle.

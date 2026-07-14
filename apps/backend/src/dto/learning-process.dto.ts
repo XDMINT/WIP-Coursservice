@@ -1,4 +1,9 @@
-import { Task, TaskUnlockMode } from '../entities/task.entity';
+import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from '../entities/task.entity';
+import {
+  TaskAssessment,
+  TaskAssessmentStatus,
+  TaskAssessmentTargetType,
+} from '../entities/task-assessment.entity';
 import {
   TaskProgress,
   TaskProgressStatus,
@@ -17,6 +22,12 @@ export type LearningTaskResponseDto = {
   unlockMode: TaskUnlockMode;
   prerequisiteTaskId?: string;
   completionCriteria?: Record<string, unknown>;
+  gradingMode: TaskGradingMode;
+  workMode: TaskWorkMode;
+  maxPoints?: number | null;
+  passThreshold?: number | null;
+  feedbackRequired: boolean;
+  allowRetries: boolean;
   isPublished: boolean;
   demoKey?: string;
   createdBy: string;
@@ -35,6 +46,8 @@ export type StudentLearningTaskResponseDto = LearningTaskResponseDto & {
   completedAt?: string;
   resultPassed?: boolean;
   unlockSource?: TaskUnlockSource;
+  assessment?: TaskAssessmentResponseDto | null;
+  group?: StudentTaskGroupContextDto | null;
 };
 
 export type LearningPathResponseDto = {
@@ -61,6 +74,18 @@ export type LearningTaskProgressDto = {
   completedAt?: string;
   resultPassed?: boolean;
   unlockSource?: TaskUnlockSource;
+  assessment?: TaskAssessmentResponseDto | null;
+  groupId?: string | null;
+  groupName?: string | null;
+};
+
+export type StudentTaskGroupContextDto = {
+  id: string;
+  name: string;
+  status?: TaskProgressStatus;
+  startedAt?: string | null;
+  submittedAt?: string | null;
+  completedAt?: string | null;
 };
 
 export type StudentProgressOverviewDto = {
@@ -84,6 +109,12 @@ export type CreateLearningTaskDto = {
   unlockMode?: TaskUnlockMode | string;
   prerequisiteTaskId?: string | null;
   completionCriteria?: Record<string, unknown> | null;
+  gradingMode?: TaskGradingMode | string;
+  workMode?: TaskWorkMode | string;
+  maxPoints?: number | string | null;
+  passThreshold?: number | string | null;
+  feedbackRequired?: boolean;
+  allowRetries?: boolean;
   isPublished?: boolean;
 };
 
@@ -105,6 +136,43 @@ export type ManualUnlockLearningTaskDto = {
   studentId?: string | number;
 };
 
+export type SubmitLearningTaskDto = {
+  submissionData?: Record<string, unknown>;
+};
+
+export type MockEvaluateLearningTaskDto = {
+  submissionData?: Record<string, unknown>;
+  passed?: boolean;
+};
+
+export type ManualTaskAssessmentDto = {
+  points?: number | string | null;
+  maxPoints?: number | string | null;
+  passed?: boolean;
+  feedback?: string | null;
+};
+
+export type TaskAssessmentResponseDto = {
+  id: string;
+  courseRunId: string;
+  courseVersionId: string;
+  taskId: string;
+  assessmentTargetType: TaskAssessmentTargetType;
+  studentId?: string | null;
+  groupId?: string | null;
+  gradingMode: TaskGradingMode;
+  status: TaskAssessmentStatus;
+  points?: number | null;
+  maxPoints?: number | null;
+  passThreshold?: number | null;
+  passed?: boolean | null;
+  feedback?: string | null;
+  assessedBy?: string | null;
+  assessedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 const toIsoString = (value?: Date): string | undefined =>
   value instanceof Date ? value.toISOString() : undefined;
 
@@ -120,6 +188,16 @@ export const mapLearningTaskToDto = (task: Task): LearningTaskResponseDto => ({
   unlockMode: task.unlockMode,
   prerequisiteTaskId: task.prerequisiteTaskId,
   completionCriteria: task.completionCriteria,
+  gradingMode: task.gradingMode ?? TaskGradingMode.NOT_GRADED,
+  workMode: task.workMode ?? TaskWorkMode.INDIVIDUAL,
+  maxPoints: task.maxPoints === undefined || task.maxPoints === null
+    ? null
+    : Number(task.maxPoints),
+  passThreshold: task.passThreshold === undefined || task.passThreshold === null
+    ? null
+    : Number(task.passThreshold),
+  feedbackRequired: task.feedbackRequired === true,
+  allowRetries: task.allowRetries === true,
   isPublished: task.isPublished,
   demoKey: task.demoKey,
   createdBy: task.createdBy,
@@ -132,6 +210,8 @@ export const mapLearningTaskWithProgressToDto = (
   task: Task,
   progress: TaskProgress | null,
   lockedReason?: string,
+  assessment?: TaskAssessment | null,
+  group?: StudentTaskGroupContextDto | null,
 ): StudentLearningTaskResponseDto => ({
   ...mapLearningTaskToDto(task),
   status: progress?.status ?? TaskProgressStatus.LOCKED,
@@ -143,11 +223,15 @@ export const mapLearningTaskWithProgressToDto = (
   completedAt: toIsoString(progress?.completedAt),
   resultPassed: progress?.resultPassed,
   unlockSource: progress?.unlockSource,
+  assessment: assessment ? mapTaskAssessmentToDto(assessment) : null,
+  group: group ?? null,
 });
 
 export const mapTaskProgressToDto = (
   task: Task,
   progress: TaskProgress | null,
+  assessment?: TaskAssessment | TaskAssessmentResponseDto | null,
+  group?: StudentTaskGroupContextDto | null,
 ): LearningTaskProgressDto => ({
   taskId: task.id,
   title: task.title,
@@ -159,4 +243,41 @@ export const mapTaskProgressToDto = (
   completedAt: toIsoString(progress?.completedAt),
   resultPassed: progress?.resultPassed,
   unlockSource: progress?.unlockSource,
+  assessment: assessment
+    ? 'courseRun' in assessment
+      ? mapTaskAssessmentToDto(assessment)
+      : assessment
+    : null,
+  groupId: group?.id ?? null,
+  groupName: group?.name ?? null,
+});
+
+export const mapTaskAssessmentToDto = (
+  assessment: TaskAssessment,
+): TaskAssessmentResponseDto => ({
+  id: assessment.id,
+  courseRunId: assessment.courseRunId,
+  courseVersionId: assessment.courseVersionId,
+  taskId: assessment.taskId,
+  assessmentTargetType:
+    assessment.assessmentTargetType ?? TaskAssessmentTargetType.INDIVIDUAL,
+  studentId: assessment.studentId,
+  groupId: assessment.groupId,
+  gradingMode: assessment.gradingMode,
+  status: assessment.status,
+  points: assessment.points === undefined || assessment.points === null
+    ? null
+    : Number(assessment.points),
+  maxPoints: assessment.maxPoints === undefined || assessment.maxPoints === null
+    ? null
+    : Number(assessment.maxPoints),
+  passThreshold: assessment.passThreshold === undefined || assessment.passThreshold === null
+    ? null
+    : Number(assessment.passThreshold),
+  passed: assessment.passed,
+  feedback: assessment.feedback,
+  assessedBy: assessment.assessedBy,
+  assessedAt: toIsoString(assessment.assessedAt ?? undefined),
+  createdAt: toIsoString(assessment.createdAt),
+  updatedAt: toIsoString(assessment.updatedAt),
 });

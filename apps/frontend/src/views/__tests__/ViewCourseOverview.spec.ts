@@ -9,6 +9,7 @@ const courseServiceMock = vi.hoisted(() => ({
   changeUserRole: vi.fn(),
   getCourseContext: vi.fn(),
   getCourseMembers: vi.fn(),
+  listAuditEvents: vi.fn(),
   listCourseVersions: vi.fn(),
   leaveCourse: vi.fn()
 }))
@@ -89,9 +90,17 @@ const mountView = () =>
   mount(ViewCourseOverview, {
     global: {
       stubs: {
+        AuditEventsPanel: {
+          props: ['courseRunId'],
+          template: '<div class="audit-panel">audit {{ courseRunId }}</div>'
+        },
         CourseResultsPanel: {
           props: ['courseRunId', 'readOnly'],
           template: '<div class="results-panel">results {{ courseRunId }} {{ readOnly ? "readonly" : "editable" }}</div>'
+        },
+        CourseGroupsPanel: {
+          props: ['courseRunId', 'readOnly', 'canManage'],
+          template: '<div class="groups-panel">groups {{ courseRunId }} {{ canManage ? "manage" : "read" }} {{ readOnly ? "readonly" : "editable" }}</div>'
         },
         CourseRunsPanel: {
           emits: ['selected', 'updated'],
@@ -150,6 +159,7 @@ describe('ViewCourseOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     courseServiceMock.getCourseMembers.mockResolvedValue({ data: [] })
+    courseServiceMock.listAuditEvents.mockResolvedValue([])
     courseServiceMock.listCourseVersions.mockResolvedValue([
       {
         id: 'version-1',
@@ -183,7 +193,9 @@ describe('ViewCourseOverview', () => {
 
     expect(wrapper.text()).not.toContain('Durchläufe')
     expect(wrapper.text()).not.toContain('Inhaltsversionen')
+    expect(wrapper.text()).not.toContain('Audit')
     expect(wrapper.find('.runs-panel').exists()).toBe(false)
+    expect(wrapper.find('.audit-panel').exists()).toBe(false)
     expect(wrapper.find('.materials-panel').text()).toContain('editable')
   })
 
@@ -203,7 +215,9 @@ describe('ViewCourseOverview', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Durchläufe')
+    expect(wrapper.text()).toContain('Audit')
     expect(wrapper.text()).toContain('materials run-2 editable')
+    expect(wrapper.text()).toContain('audit run-2')
 
     await wrapper.find('.select-old').trigger('click')
     await flushPromises()
@@ -212,6 +226,7 @@ describe('ViewCourseOverview', () => {
     expect(wrapper.text()).toContain('materials run-1 readonly')
     expect(wrapper.text()).toContain('tasks run-1 readonly')
     expect(wrapper.text()).toContain('results run-1 readonly')
+    expect(wrapper.text()).toContain('audit run-1')
     expect(courseServiceMock.getCourseMembers).toHaveBeenLastCalledWith('course-id', 'run-1')
   })
 })

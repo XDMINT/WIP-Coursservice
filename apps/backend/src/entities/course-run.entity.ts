@@ -13,6 +13,8 @@ import {
 import { Course } from './course.entity';
 import { CourseVersion } from './course-version.entity';
 import { Enrollment } from './enrollment.entity';
+import { CourseGroup } from './course-group.entity';
+import { GroupTaskProgress } from './group-task-progress.entity';
 import { LearningMaterial } from './learning-material.entity';
 import { Task } from './task.entity';
 import { Assignment } from './assignment.entity';
@@ -89,11 +91,17 @@ export class CourseRun {
   @OneToMany(() => Enrollment, (enrollment) => enrollment.courseRun)
   enrollments: Enrollment[];
 
+  @OneToMany(() => CourseGroup, (group) => group.courseRun)
+  groups: CourseGroup[];
+
   @OneToMany(() => LearningMaterial, (material) => material.courseRun)
   learningMaterials: LearningMaterial[];
 
   @OneToMany(() => Task, (task) => task.courseRun)
   tasks: Task[];
+
+  @OneToMany(() => GroupTaskProgress, (progress) => progress.courseRun)
+  groupTaskProgress: GroupTaskProgress[];
 
   @OneToMany(() => Assignment, (assignment) => assignment.courseRun)
   assignments: Assignment[];

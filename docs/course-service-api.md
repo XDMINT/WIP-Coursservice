@@ -99,19 +99,21 @@ The frontend labels this action separately from the regular rhythm-based
 planning.
 
 Copied content includes learning materials, file references, material metadata,
-tasks, task ordering, prerequisite links and material release rules. Task and
-material records receive new ids, and task references are remapped to the copied
-tasks. Person-bound or assessment data is not copied: enrollments, task
-progress, grades, course results, assignments/submissions, individual unlocks
-and comments start empty for the new run.
+tasks, task ordering, prerequisite links, task work mode, task grading rules and
+material release rules. Task and material records receive new ids, and task
+references are remapped to the copied tasks. Person-bound, group-bound or
+assessment data is not copied: enrollments, study groups, group memberships,
+task progress, group task progress, task assessments, grades, course results,
+assignments/submissions, individual unlocks and comments start empty for the
+new run.
 `POST /runs/next` leaves the new run inactive by default; teachers activate it
 with the separate activate endpoint or by sending `activate: true`.
 
 Existing course-level data is migrated into one initial active run per course.
-Enrollment, materials, tasks, assignments, course results and content versions
+Enrollment, materials, tasks, assignments, task assessments and content versions
 then carry a run reference. Existing routes such as `/courses/:id/materials`,
-`/courses/:id/tasks`, `/courses/:id/results` and `/courses/:id/versions`
-default to the current active run.
+`/courses/:id/tasks`, `/courses/:id/assessments` and `/courses/:id/versions`
+default to the current active run where such a default route exists.
 
 ## Course Catalog And Enrollment
 
@@ -177,16 +179,48 @@ does not remove physical files.
 | Manage course members | Yes | Yes | No |
 | Read own results | Yes | Yes | Yes |
 | Read other students' results | Yes | Yes | No |
+| Read course audit events | Yes | No | No |
 
 Backend checks use central Course Service permission functions. Frontend
 permission flags are only presentation hints and are not the security boundary.
+
+## Audit Events
+
+The Course Service stores business audit events in PostgreSQL and exposes them
+only to teaching users with course-management permission.
+
+Relevant paths:
+
+- `GET /api/courses/:courseId/audit-events`
+- `GET /api/courses/:courseId/runs/:runId/audit-events`
+
+Supported query parameters are `eventType`, `from`, `to` and `limit`. The
+service caps `limit` at 100. Responses include timestamp, event type, actor,
+role, course/run/version references, summary, reduced metadata and request id.
+Students cannot access these endpoints and do not see the Audit tab in the
+course UI.
 
 ## Learning Process
 
 The Course Service exposes the current mini-project task representation and
 learning-progress release rules. Responses are DTOs and include computed student
-status values such as `LOCKED`, `AVAILABLE`, `IN_PROGRESS`, `COMPLETED` and
-`FAILED`.
+status values such as `LOCKED`, `AVAILABLE`, `IN_PROGRESS`, `SUBMITTED`,
+`COMPLETED` and `FAILED`.
+
+Progress and assessment are deliberately separate:
+
+- `TaskProgress` describes availability, start, submission and completion in
+  the learning path.
+- `TaskAssessment` describes the grading result, points, pass status, feedback
+  and assessment source for a task in one course run.
+
+Supported task work modes are `INDIVIDUAL` and `GROUP`. Supported task grading
+modes are `NOT_GRADED`, `SELF_CONFIRMATION`, `MANUAL` and `AUTOMATIC_MOCK`.
+Students never call an endpoint that directly sets "passed"; they either mark
+non-graded/self-confirmation individual tasks as done, submit a manual
+individual task, trigger the demo mock evaluator, or start/submit a group task
+for their own group. Teaching roles assess manual submissions and group
+submissions.
 
 Relevant paths:
 
@@ -196,33 +230,65 @@ Relevant paths:
 - `POST /api/courses/tasks/:id/start`
 - `POST /api/courses/tasks/:id/complete`
 - `POST /api/courses/tasks/:id/fail`
+- `POST /api/courses/tasks/:id/self-confirm`
+- `POST /api/courses/tasks/:id/submit`
+- `POST /api/courses/tasks/:id/mock-evaluate`
 - `POST /api/courses/tasks/:id/manual-unlock`
+- `POST /api/courses/tasks/:id/group/start`
+- `POST /api/courses/tasks/:id/group/submit`
+- `GET /api/courses/:courseId/runs/:runId/assessments`
+- `GET /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments`
+- `POST /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments/:studentId/manual`
+- `POST /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments/:studentId/reset`
+- `PUT /api/courses/:courseId/runs/:runId/tasks/:taskId/groups/:groupId/manual-assessment`
 
 Students can only change their own progress and only for available tasks.
-Teaching roles manage task configuration and manual unlocks. The demo completion
-actions call the same service-level use case intended for a later grading
-system: `recordTaskResult(studentId, taskId, passed)`.
+Teaching roles manage task configuration, manual unlocks and manual
+assessments. `complete` and `fail` are retained for compatibility; new frontend
+flows use `self-confirm`, `submit` and `mock-evaluate`.
 
-## Course Results
+## Study Groups
 
-Kursergebnisse liegen unter `/api/courses/:courseId/results`.
+Study groups are implemented inside the Course Service for the mini-version;
+there is no separate Group Service. A group belongs to exactly one CourseRun.
+Teaching roles with member/content management permissions create groups,
+assign enrolled students, remove members and delete groups while no group
+progress or group assessment exists. Students can only read their own group.
 
 Relevant paths:
 
-- `GET /api/courses/:courseId/results/me`
-- `GET /api/courses/:courseId/results?page=1&pageSize=10&passStatus=PASSED&source=MANUAL_OVERRIDE`
-- `PUT /api/courses/:courseId/results/:studentId/manual`
-- `POST /api/courses/:courseId/results/:studentId/recalculate`
-- `POST /api/courses/:courseId/results/recalculate`
+- `GET /api/courses/:courseId/runs/:runId/groups`
+- `POST /api/courses/:courseId/runs/:runId/groups`
+- `GET /api/courses/:courseId/runs/:runId/groups/my`
+- `PUT /api/courses/:courseId/runs/:runId/groups/:groupId`
+- `DELETE /api/courses/:courseId/runs/:runId/groups/:groupId`
+- `POST /api/courses/:courseId/runs/:runId/groups/:groupId/members`
+- `DELETE /api/courses/:courseId/runs/:runId/groups/:groupId/members/:studentId`
 
-Studierende erhalten ausschliesslich ihr eigenes Ergebnis. Teaching roles sehen
-eine paginierte Teilnehmeruebersicht, koennen manuelle Bewertungen speichern und
-automatische Neuberechnungen aus finalen Assignment-Punkten ausloesen.
-Alle Ergebnislisten und Neuberechnungen beziehen sich auf den aktuellen aktiven
-Course Run.
+Students must be enrolled in the same CourseRun before they can be assigned to
+a group. A student can belong to at most one group per CourseRun. Hard deletion
+is rejected once group task progress or group assessments exist.
 
-Die Bestehensregel ist zentral im Backend abgelegt: mehr als 50 Prozent ist
-bestanden; exakt 50 Prozent oder weniger ist nicht bestanden.
+## Assessment Overview
+
+Der Reiter `Bewertungen` verwendet keine eigene Bewertungslogik. Er liest und
+verwaltet dieselben `TaskAssessment`-Daten, die auch in der Aufgabenansicht
+angezeigt werden.
+
+Relevant paths:
+
+- `GET /api/courses/:courseId/runs/:runId/assessments`
+- `GET /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments`
+- `POST /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments/:studentId/manual`
+- `POST /api/courses/:courseId/runs/:runId/tasks/:taskId/assessments/:studentId/reset`
+
+Aufgaben definieren die Bewertungsregeln. `TaskAssessment` speichert das
+konkrete Ergebnis pro CourseRun, CourseVersion, Aufgabe und Student. Der
+Bewertungen-Tab ist eine Teacher-/Admin-Übersicht für offene Abgaben,
+bestandene und nicht bestandene Aufgaben, Punkte und Feedback. Manuelle
+Bewertungen, die dort gesetzt werden, erscheinen anschließend in der
+Aufgabenansicht des Studierenden, weil beide Ansichten dieselbe Datenquelle
+verwenden.
 
 ## Error Format
 

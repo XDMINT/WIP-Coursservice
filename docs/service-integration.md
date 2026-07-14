@@ -97,3 +97,8 @@ Ein spaeterer Service darf intern ebenfalls Port `3000` oder `8080` verwenden. D
 ## Datenbesitz
 
 Ein spaeterer Group/Task Service darf eigene Tabellen in seiner eigenen Datenbank besitzen. Der Course Service darf nicht direkt auf diese Datenbank zugreifen. Wenn Kursdaten benoetigt werden, ruft der Group/Task Service eine dokumentierte Course-Service-API auf oder nutzt spaeter eine bewusst eingefuehrte Event-Integration.
+
+In der aktuellen Mini-Version ist die Gruppenfunktion kein separater Service.
+CourseRun-Gruppen, Gruppenmitglieder, Gruppenaufgaben-Fortschritt und
+Gruppenbewertungen liegen im Course Service und bleiben dort an die bestehenden
+Kurs-, Aufgaben-, Fortschritts- und Assessment-Regeln gebunden.

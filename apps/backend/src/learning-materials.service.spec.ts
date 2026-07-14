@@ -257,6 +257,7 @@ const createService = (options: {
     emptyRepository() as any,
     enrollmentRepository as any,
     taskRepository as any,
+    emptyRepository() as any,
     taskProgressRepository as any,
     emptyRepository() as any,
     emptyRepository() as any,

@@ -21,15 +21,16 @@ describe('CoursesController', () => {
     findOne: jest.fn(),
     getAvailableCourses: jest.fn(),
     getCourseMembersByRun: jest.fn(),
-    getCourseResultsByRun: jest.fn(),
     getCourseVersion: jest.fn(),
     getCurrentCourseRun: jest.fn(),
     getEnrolledCourses: jest.fn(),
     getLearningMaterialsByCourseRun: jest.fn(),
+    listTaskAssessmentsByRun: jest.fn(),
     getLearningTaskProgressOverviewByRun: jest.fn(),
     getCourseRun: jest.fn(),
     getCourseRunPlan: jest.fn(),
     getTasksByCourseRun: jest.fn(),
+    listAuditEvents: jest.fn(),
     listCourseVersions: jest.fn(),
     listCourseRuns: jest.fn(),
     updateCourseRunPlanTemplate: jest.fn(),
@@ -183,7 +184,8 @@ describe('CoursesController', () => {
     service.getTasksByCourseRun.mockResolvedValue([{ id: 'task-1' }]);
     service.getCourseMembersByRun.mockResolvedValue([{ id: 'enrollment-1' }]);
     service.getLearningTaskProgressOverviewByRun.mockResolvedValue([{ studentId: '3' }]);
-    service.getCourseResultsByRun.mockResolvedValue({ items: [], page: 1, pageSize: 10, total: 0 });
+    service.listTaskAssessmentsByRun.mockResolvedValue([]);
+    service.listAuditEvents.mockResolvedValue([{ id: 'audit-1' }]);
     service.getCourseRunPlan.mockResolvedValue({ recurrenceType: 'SEMESTER' });
     service.updateCourseRunPlanTemplate.mockResolvedValue({ templateStrategy: 'SPECIFIC_VERSION' });
     service.createCourseRun.mockResolvedValue({ id: 'run-3' });
@@ -212,8 +214,19 @@ describe('CoursesController', () => {
       controller.getLearningTaskProgressOverviewByRun('course-id', 'run-1', actorRequest as any),
     ).resolves.toEqual([{ studentId: '3' }]);
     await expect(
-      controller.getCourseResultsByRun('course-id', 'run-1', { page: 1 }, actorRequest as any),
-    ).resolves.toEqual({ items: [], page: 1, pageSize: 10, total: 0 });
+      controller.getTaskAssessmentsByRun('course-id', 'run-1', actorRequest as any),
+    ).resolves.toEqual([]);
+    await expect(
+      controller.listAuditEvents('course-id', { limit: 10 }, actorRequest as any),
+    ).resolves.toEqual([{ id: 'audit-1' }]);
+    await expect(
+      controller.listAuditEventsByRun(
+        'course-id',
+        'run-1',
+        { eventType: 'TASK_CREATED' },
+        actorRequest as any,
+      ),
+    ).resolves.toEqual([{ id: 'audit-1' }]);
     await expect(
       controller.getCourseRunPlan('course-id', actorRequest as any),
     ).resolves.toEqual({ recurrenceType: 'SEMESTER' });
@@ -249,7 +262,13 @@ describe('CoursesController', () => {
     expect(service.getTasksByCourseRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
     expect(service.getCourseMembersByRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
     expect(service.getLearningTaskProgressOverviewByRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
-    expect(service.getCourseResultsByRun).toHaveBeenCalledWith('course-id', 'run-1', { page: 1 }, '1');
+    expect(service.listTaskAssessmentsByRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
+    expect(service.listAuditEvents).toHaveBeenCalledWith('course-id', { limit: 10 }, '1');
+    expect(service.listAuditEvents).toHaveBeenCalledWith(
+      'course-id',
+      { eventType: 'TASK_CREATED', courseRunId: 'run-1' },
+      '1',
+    );
     expect(service.getCourseRunPlan).toHaveBeenCalledWith('course-id', '1');
     expect(service.updateCourseRunPlanTemplate).toHaveBeenCalledWith(
       'course-id',

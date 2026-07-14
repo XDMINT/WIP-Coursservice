@@ -17,6 +17,7 @@ import {
     UpdateDateColumn,
 } from 'typeorm';
 import { Course } from './course.entity';
+import { CourseRun } from './course-run.entity';
 import { GroupMembership } from './group-membership.entity';
 
 /**
@@ -66,6 +67,19 @@ export class CourseGroup {
     })
     @JoinColumn({ name: 'course_id' })
     course: Course;
+
+    /**
+     * Course run this group belongs to. Groups are semester/run scoped.
+     */
+    @Column({ name: 'course_run_id', type: 'uuid', nullable: true })
+    course_run_id?: string;
+
+    @ManyToOne(() => CourseRun, (run) => run.groups, {
+        nullable: true,
+        onDelete: 'CASCADE',
+    })
+    @JoinColumn({ name: 'course_run_id' })
+    courseRun?: CourseRun;
 
     /**
      * Name of the group

@@ -225,6 +225,7 @@ const createFixture = (options: {
     emptyRepository() as any,
     emptyRepository() as any,
     emptyRepository() as any,
+    emptyRepository() as any,
     {
       deleteFile: jest.fn(),
       openFile: jest.fn(),

@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 
 import { Assignment } from '../entities/assignment.entity';
+import { AuditEvent } from '../entities/audit-event.entity';
 import { CalendarEvent } from '../entities/calendar-event.entity';
 import { ContentRelease } from '../entities/content-release.entity';
 import { ContentTemplate } from '../entities/content-template.entity';
@@ -13,9 +14,11 @@ import { Course } from '../entities/course.entity';
 import { Enrollment } from '../entities/enrollment.entity';
 import { Grade } from '../entities/grade.entity';
 import { GroupMembership } from '../entities/group-membership.entity';
+import { GroupTaskProgress } from '../entities/group-task-progress.entity';
 import { LearningMaterial } from '../entities/learning-material.entity';
 import { TaskProgress } from '../entities/task-progress.entity';
 import { Task } from '../entities/task.entity';
+import { TaskAssessment } from '../entities/task-assessment.entity';
 import { CreateCourseSchema1720000000000 } from '../migrations/1720000000000-CreateCourseSchema';
 import { AddCourseAuditFields1720000001000 } from '../migrations/1720000001000-AddCourseAuditFields';
 import { ExpandLearningMaterials1720000002000 } from '../migrations/1720000002000-ExpandLearningMaterials';
@@ -29,19 +32,25 @@ import { AddLearningMaterialReleaseRules1720000009000 } from '../migrations/1720
 import { AddCourseVersionTemplateMetadata1720000010000 } from '../migrations/1720000010000-AddCourseVersionTemplateMetadata';
 import { LinkContentToCourseVersions1720000011000 } from '../migrations/1720000011000-LinkContentToCourseVersions';
 import { AddCourseRunPlanTemplateSettings1720000012000 } from '../migrations/1720000012000-AddCourseRunPlanTemplateSettings';
+import { AddTaskAssessments1720000013000 } from '../migrations/1720000013000-AddTaskAssessments';
+import { AddAuditEvents1720000014000 } from '../migrations/1720000014000-AddAuditEvents';
+import { AddRunGroupsAndGroupTasks1720000015000 } from '../migrations/1720000015000-AddRunGroupsAndGroupTasks';
 
 const entities = [
+  AuditEvent,
   Course,
   CourseRun,
   CourseVersion,
   Enrollment,
   CourseGroup,
   GroupMembership,
+  GroupTaskProgress,
   LearningMaterial,
   Assignment,
   Grade,
   CourseResult,
   Task,
+  TaskAssessment,
   TaskProgress,
   ContentRelease,
   ContentTemplate,
@@ -83,6 +92,9 @@ export const createDatabaseOptions = (
     AddCourseVersionTemplateMetadata1720000010000,
     LinkContentToCourseVersions1720000011000,
     AddCourseRunPlanTemplateSettings1720000012000,
+    AddTaskAssessments1720000013000,
+    AddAuditEvents1720000014000,
+    AddRunGroupsAndGroupTasks1720000015000,
   ],
   migrationsRun: parseBoolean(
     configService.get<string>('DATABASE_MIGRATIONS_RUN'),

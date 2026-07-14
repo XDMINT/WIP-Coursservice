@@ -17,12 +17,26 @@ import {
 import { Course } from './course.entity';
 import { CourseRun } from './course-run.entity';
 import { CourseVersion } from './course-version.entity';
+import { GroupTaskProgress } from './group-task-progress.entity';
 import { TaskProgress } from './task-progress.entity';
+import { TaskAssessment } from './task-assessment.entity';
 
 export enum TaskUnlockMode {
   IMMEDIATE = 'IMMEDIATE',
   AUTOMATIC = 'AUTOMATIC',
   MANUAL = 'MANUAL',
+}
+
+export enum TaskGradingMode {
+  NOT_GRADED = 'NOT_GRADED',
+  SELF_CONFIRMATION = 'SELF_CONFIRMATION',
+  MANUAL = 'MANUAL',
+  AUTOMATIC_MOCK = 'AUTOMATIC_MOCK',
+}
+
+export enum TaskWorkMode {
+  INDIVIDUAL = 'INDIVIDUAL',
+  GROUP = 'GROUP',
 }
 
 /**
@@ -94,6 +108,24 @@ export class Task {
   @Column({ nullable: true })
   demoKey?: string;
 
+  @Column({ type: 'varchar', default: TaskGradingMode.NOT_GRADED })
+  gradingMode: TaskGradingMode;
+
+  @Column({ type: 'varchar', default: TaskWorkMode.INDIVIDUAL })
+  workMode: TaskWorkMode;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  maxPoints?: number | null;
+
+  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
+  passThreshold?: number | null;
+
+  @Column({ default: false })
+  feedbackRequired: boolean;
+
+  @Column({ default: false })
+  allowRetries: boolean;
+
   /**
    * User ID of the creator (typically an instructor)
    * @example "teacher-123"
@@ -159,4 +191,10 @@ export class Task {
    */
   @OneToMany(() => TaskProgress, (progress) => progress.task)
   progress: TaskProgress[];
+
+  @OneToMany(() => GroupTaskProgress, (progress) => progress.task)
+  groupProgress: GroupTaskProgress[];
+
+  @OneToMany(() => TaskAssessment, (assessment) => assessment.task)
+  assessments: TaskAssessment[];
 }

@@ -13,25 +13,27 @@ import {
   LearningMaterial,
   LearningMaterialPublicationStatus,
 } from './entities/learning-material.entity';
-import { Task, TaskUnlockMode } from './entities/task.entity';
+import { CourseGroup } from './entities/course-group.entity';
+import { GroupMembership } from './entities/group-membership.entity';
+import { Task, TaskGradingMode, TaskUnlockMode } from './entities/task.entity';
 
 const matchesWhere = (item: any, where: Record<string, any> = {}) =>
   Object.entries(where).every(([key, expected]) => item[key] === expected);
 
-const createRepository = <T extends { id?: string }>(
+const createRepository = <T extends Record<string, any>>(
   items: T[],
   prefix: string,
 ) => {
   let nextId = items.length + 1;
 
   const saveOne = (entity: T): T => {
-    if (!entity.id) {
+    if (!(entity as any).id) {
       do {
-        entity.id = `${prefix}-${nextId++}`;
-      } while (items.some((item) => item.id === entity.id));
+        (entity as any).id = `${prefix}-${nextId++}`;
+      } while (items.some((item) => (item as any).id === (entity as any).id));
     }
 
-    const existingIndex = items.findIndex((item) => item.id === entity.id);
+    const existingIndex = items.findIndex((item) => (item as any).id === (entity as any).id);
 
     if (existingIndex >= 0) {
       items[existingIndex] = {
@@ -103,7 +105,7 @@ const createDemoTask = (): Task =>
   }) as Task;
 
 describe('CourseDemoSeedService', () => {
-  it('creates missing demo master data without overwriting existing course, enrollment or task data', async () => {
+  it('creates missing demo master data and refreshes deterministic demo task data without overwriting course or enrollment data', async () => {
     const course = createDemoCourse();
     const enrollment = createDemoEnrollment();
     const task = createDemoTask();
@@ -112,6 +114,8 @@ describe('CourseDemoSeedService', () => {
     const enrollmentRepository = createRepository<Enrollment>([enrollment], 'enrollment');
     const learningMaterialRepository = createRepository<LearningMaterial>([], 'material');
     const taskRepository = createRepository<Task>([task], 'task');
+    const courseGroupRepository = createRepository<CourseGroup>([], 'group');
+    const groupMembershipRepository = createRepository<GroupMembership>([], 'group-membership');
     const courseVersionRepository = createRepository<CourseVersion>(
       [
         {
@@ -139,6 +143,8 @@ describe('CourseDemoSeedService', () => {
       learningMaterialRepository as any,
       taskRepository as any,
       courseVersionRepository as any,
+      courseGroupRepository as any,
+      groupMembershipRepository as any,
     );
 
     await service.onApplicationBootstrap();
@@ -197,14 +203,30 @@ describe('CourseDemoSeedService', () => {
       role: CourseMemberRole.STUDENT,
       updatedBy: 'teacher',
     });
+    const previousLearningRun = courseRunRepository.items.find(
+      (item) => item.courseId === 'course-id' && item.label === 'Sommersemester 2026',
+    );
     expect(taskRepository.items.find((item) => item.id === 'task-1')).toMatchObject({
-      courseRunId: activeLearningRun?.id,
-      description: 'Bestehende Aufgabenbeschreibung',
-      isPublished: false,
-      order: 9,
-      title: 'Von Lehrenden angepasste Aufgabe',
-      unlockMode: TaskUnlockMode.MANUAL,
-      updatedBy: 'teacher',
+      courseRunId: previousLearningRun?.id,
+      description: 'Ein kurzer einführender Lernschritt für den Demo-Ablauf.',
+      gradingMode: TaskGradingMode.SELF_CONFIRMATION,
+      isPublished: true,
+      order: 1,
+      title: 'Grundlagen kennenlernen',
+      unlockMode: TaskUnlockMode.IMMEDIATE,
+      updatedBy: 'demo-seed',
+    });
+    expect(
+      taskRepository.items.find(
+        (item) =>
+          item.courseRunId === activeLearningRun?.id &&
+          item.demoKey === 'learning-process-basics',
+      ),
+    ).toMatchObject({
+      gradingMode: TaskGradingMode.SELF_CONFIRMATION,
+      isPublished: true,
+      title: 'Grundlagen kennenlernen',
+      unlockMode: TaskUnlockMode.IMMEDIATE,
     });
     expect(taskRepository.items).toEqual(
       expect.arrayContaining([
@@ -215,9 +237,6 @@ describe('CourseDemoSeedService', () => {
           demoKey: 'learning-process-final-task',
         }),
       ]),
-    );
-    const previousLearningRun = courseRunRepository.items.find(
-      (item) => item.courseId === 'course-id' && item.label === 'Sommersemester 2026',
     );
     expect(learningMaterialRepository.items).toEqual(
       expect.arrayContaining([
@@ -278,10 +297,16 @@ describe('CourseDemoSeedService', () => {
       ]),
       tasks: expect.arrayContaining([
         expect.objectContaining({
-          title: 'Von Lehrenden angepasste Aufgabe',
+          gradingMode: TaskGradingMode.SELF_CONFIRMATION,
+          title: 'Grundlagen kennenlernen',
         }),
         expect.objectContaining({
           demoKey: 'learning-process-apply-basics',
+          gradingMode: TaskGradingMode.MANUAL,
+        }),
+        expect.objectContaining({
+          demoKey: 'learning-process-final-task',
+          gradingMode: TaskGradingMode.AUTOMATIC_MOCK,
         }),
       ]),
     });

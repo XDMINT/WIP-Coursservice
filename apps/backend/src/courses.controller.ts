@@ -30,10 +30,12 @@ import { Assignment } from './entities/assignment.entity';
 import { Grade } from './entities/grade.entity';
 import { ContentRelease } from './entities/content-release.entity';
 import { ContentTemplate } from './entities/content-template.entity';
-import { CourseGroup } from './entities/course-group.entity';
-import { GroupMembership } from './entities/group-membership.entity';
 import { CalendarEvent } from './entities/calendar-event.entity';
 import { Course } from './entities/course.entity';
+import {
+  AuditEventListQueryDto,
+  AuditEventResponseDto,
+} from './dto/audit-event.dto';
 import {
   CourseCatalogItemResponseDto,
   CourseRunDeletionResponseDto,
@@ -49,19 +51,23 @@ import {
   CreateLearningTaskDto,
   LearningPathResponseDto,
   LearningTaskResponseDto,
+  ManualTaskAssessmentDto,
   ManualUnlockLearningTaskDto,
+  MockEvaluateLearningTaskDto,
   StudentProgressOverviewDto,
+  SubmitLearningTaskDto,
+  TaskAssessmentResponseDto,
   UpdateLearningTaskDto,
   UpdateLearningTaskReleaseConfigDto,
   UpdateLearningTaskSortDto,
 } from './dto/learning-process.dto';
 import {
-  CourseResultListQueryDto,
-  CourseResultListResponseDto,
-  CourseResultResponseDto,
-  ManualCourseResultDto,
-} from './dto/course-result.dto';
-
+  AddStudyGroupMemberDto,
+  CreateStudyGroupDto,
+  ManualGroupTaskAssessmentDto,
+  StudyGroupResponseDto,
+  UpdateStudyGroupDto,
+} from './dto/study-group.dto';
 const maxMaterialUploadBytes = () =>
   Number(process.env.COURSE_MATERIAL_MAX_FILE_SIZE_BYTES ?? 50 * 1024 * 1024);
 
@@ -140,6 +146,19 @@ export class CoursesController {
     ) {
         return this.coursesService.getCourseMembers(
             id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/audit-events')
+    listAuditEvents(
+        @Param('id') id: string,
+        @Query() query: AuditEventListQueryDto,
+        @Req() request: Request,
+    ): Promise<AuditEventResponseDto[]> {
+        return this.coursesService.listAuditEvents(
+            id,
+            query,
             getRequestActor(request).userId,
         );
     }
@@ -281,17 +300,80 @@ export class CoursesController {
         );
     }
 
-    @Get(':id/runs/:runId/results')
-    getCourseResultsByRun(
+    @Get(':id/runs/:runId/assessments')
+    getTaskAssessmentsByRun(
         @Param('id') id: string,
         @Param('runId') runId: string,
-        @Query() query: CourseResultListQueryDto,
         @Req() request: Request,
-    ): Promise<CourseResultListResponseDto> {
-        return this.coursesService.getCourseResultsByRun(
+    ): Promise<TaskAssessmentResponseDto[]> {
+        return this.coursesService.listTaskAssessmentsByRun(
             id,
             runId,
-            query,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/audit-events')
+    listAuditEventsByRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Query() query: AuditEventListQueryDto,
+        @Req() request: Request,
+    ): Promise<AuditEventResponseDto[]> {
+        return this.coursesService.listAuditEvents(
+            id,
+            { ...query, courseRunId: runId },
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/tasks/:taskId/assessments')
+    getTaskAssessmentsByTask(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('taskId') taskId: string,
+        @Req() request: Request,
+    ): Promise<TaskAssessmentResponseDto[]> {
+        return this.coursesService.listTaskAssessmentsByTask(
+            id,
+            runId,
+            taskId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/:runId/tasks/:taskId/assessments/:studentId/manual')
+    setManualTaskAssessment(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('taskId') taskId: string,
+        @Param('studentId') studentId: string,
+        @Body() body: ManualTaskAssessmentDto,
+        @Req() request: Request,
+    ): Promise<TaskAssessmentResponseDto> {
+        return this.coursesService.setManualTaskAssessment(
+            id,
+            runId,
+            taskId,
+            studentId,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/:runId/tasks/:taskId/assessments/:studentId/reset')
+    resetTaskAssessment(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('taskId') taskId: string,
+        @Param('studentId') studentId: string,
+        @Req() request: Request,
+    ): Promise<TaskAssessmentResponseDto> {
+        return this.coursesService.resetTaskAssessment(
+            id,
+            runId,
+            taskId,
+            studentId,
             getRequestActor(request).userId,
         );
     }
@@ -793,69 +875,6 @@ export class CoursesController {
     );
   }
 
-  @Get(':courseId/results/me')
-  async getMyCourseResult(
-    @Param('courseId') courseId: string,
-    @Req() request: Request,
-  ): Promise<CourseResultResponseDto> {
-    return this.coursesService.getMyCourseResult(
-      courseId,
-      getRequestActor(request).userId,
-    );
-  }
-
-  @Get(':courseId/results')
-  async getCourseResults(
-    @Param('courseId') courseId: string,
-    @Query() query: CourseResultListQueryDto,
-    @Req() request: Request,
-  ): Promise<CourseResultListResponseDto> {
-    return this.coursesService.getCourseResults(
-      courseId,
-      query,
-      getRequestActor(request).userId,
-    );
-  }
-
-  @Put(':courseId/results/:studentId/manual')
-  async setManualCourseResult(
-    @Param('courseId') courseId: string,
-    @Param('studentId') studentId: string,
-    @Body() body: ManualCourseResultDto,
-    @Req() request: Request,
-  ): Promise<CourseResultResponseDto> {
-    return this.coursesService.setManualCourseResult(
-      courseId,
-      studentId,
-      body,
-      getRequestActor(request).userId,
-    );
-  }
-
-  @Post(':courseId/results/:studentId/recalculate')
-  async recalculateCourseResult(
-    @Param('courseId') courseId: string,
-    @Param('studentId') studentId: string,
-    @Req() request: Request,
-  ): Promise<CourseResultResponseDto> {
-    return this.coursesService.recalculateCourseResult(
-      courseId,
-      studentId,
-      getRequestActor(request).userId,
-    );
-  }
-
-  @Post(':courseId/results/recalculate')
-  async recalculateAllCourseResults(
-    @Param('courseId') courseId: string,
-    @Req() request: Request,
-  ): Promise<CourseResultListResponseDto> {
-    return this.coursesService.recalculateAllCourseResults(
-      courseId,
-      getRequestActor(request).userId,
-    );
-  }
-
   @Post('learning-materials/:id/publish')
   async publishLegacyLearningMaterial(
     @Param('id') id: string,
@@ -1202,6 +1221,43 @@ export class CoursesController {
     );
   }
 
+  @Post('tasks/:id/submit')
+  async submitLearningTask(
+    @Param('id') id: string,
+    @Body() body: SubmitLearningTaskDto,
+    @Req() request: Request,
+  ): Promise<LearningPathResponseDto> {
+    return this.coursesService.submitLearningTask(
+      id,
+      body,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Post('tasks/:id/self-confirm')
+  async selfConfirmLearningTask(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<LearningPathResponseDto> {
+    return this.coursesService.selfConfirmLearningTask(
+      id,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Post('tasks/:id/mock-evaluate')
+  async mockEvaluateLearningTask(
+    @Param('id') id: string,
+    @Body() body: MockEvaluateLearningTaskDto,
+    @Req() request: Request,
+  ): Promise<LearningPathResponseDto> {
+    return this.coursesService.mockEvaluateLearningTask(
+      id,
+      body,
+      getRequestActor(request).userId,
+    );
+  }
+
   @Post('tasks/:id/complete')
   async completeLearningTask(
     @Param('id') id: string,
@@ -1491,189 +1547,155 @@ export class CoursesController {
     return this.coursesService.searchContentTemplates(query, limit, offset);
   }
 
-  // Workgroup endpoints
-  @Post(':courseId/groups')
-  async createCourseGroup(
+  // Study group endpoints
+  @Get(':courseId/runs/:runId/groups')
+  async listStudyGroups(
     @Param('courseId') courseId: string,
-    @Body() body: {
-      name: string;
-      description: string;
-      groupType: string;
-      createdBy: string;
-    },
-  ): Promise<CourseGroup> {
-    return this.coursesService.createCourseGroup(
+    @Param('runId') runId: string,
+    @Req() request: Request,
+  ): Promise<StudyGroupResponseDto[]> {
+    return this.coursesService.listStudyGroups(
       courseId,
-      body.name,
-      body.description,
-      body.groupType,
-      body.createdBy,
+      runId,
+      getRequestActor(request).userId,
     );
   }
 
-  @Get(':courseId/groups')
-  async getCourseGroupsByCourse(
+  @Post(':courseId/runs/:runId/groups')
+  async createStudyGroup(
     @Param('courseId') courseId: string,
-  ): Promise<CourseGroup[]> {
-    return this.coursesService.getCourseGroupsByCourse(courseId);
-  }
-
-  @Get('groups/:id')
-  async getCourseGroupById(@Param('id') id: string): Promise<CourseGroup> {
-    return this.coursesService.getCourseGroupById(id);
-  }
-
-  @Put('groups/:id')
-  async updateCourseGroup(
-    @Param('id') id: string,
-    @Body() body: {
-      name: string;
-      description: string;
-      groupType: string;
-      isActive: boolean;
-      groupGrade: number;
-      groupFeedback: string;
-      updatedBy: string;
-    },
-  ): Promise<CourseGroup> {
-    return this.coursesService.updateCourseGroup(
-      id,
-      body.name,
-      body.description,
-      body.groupType,
-      body.isActive,
-      body.groupGrade,
-      body.groupFeedback,
-      body.updatedBy,
+    @Param('runId') runId: string,
+    @Body() body: CreateStudyGroupDto,
+    @Req() request: Request,
+  ): Promise<StudyGroupResponseDto> {
+    return this.coursesService.createStudyGroup(
+      courseId,
+      runId,
+      body,
+      getRequestActor(request).userId,
     );
   }
 
-  @Delete('groups/:id')
-  async deleteCourseGroup(@Param('id') id: string): Promise<void> {
-    return this.coursesService.deleteCourseGroup(id);
+  @Get(':courseId/runs/:runId/groups/my')
+  async getMyStudyGroup(
+    @Param('courseId') courseId: string,
+    @Param('runId') runId: string,
+    @Req() request: Request,
+  ): Promise<StudyGroupResponseDto | null> {
+    return this.coursesService.getMyStudyGroup(
+      courseId,
+      runId,
+      getRequestActor(request).userId,
+    );
   }
 
-  @Post('groups/:groupId/members')
-  async addMemberToGroup(
+  @Put(':courseId/runs/:runId/groups/:groupId')
+  async updateStudyGroup(
+    @Param('courseId') courseId: string,
+    @Param('runId') runId: string,
     @Param('groupId') groupId: string,
-    @Body() body: {
-      userId: string;
-      role: string;
-      addedBy: string;
-    },
-  ): Promise<GroupMembership> {
-    return this.coursesService.addMemberToGroup(
+    @Body() body: UpdateStudyGroupDto,
+    @Req() request: Request,
+  ): Promise<StudyGroupResponseDto> {
+    return this.coursesService.updateStudyGroup(
+      courseId,
+      runId,
       groupId,
-      body.userId,
-      body.role,
-      body.addedBy,
+      body,
+      getRequestActor(request).userId,
     );
   }
 
-  @Delete('groups/:groupId/members/:userId')
-  async removeMemberFromGroup(
+  @Delete(':courseId/runs/:runId/groups/:groupId')
+  async deleteStudyGroup(
+    @Param('courseId') courseId: string,
+    @Param('runId') runId: string,
     @Param('groupId') groupId: string,
-    @Param('userId') userId: string,
+    @Req() request: Request,
   ): Promise<void> {
-    return this.coursesService.removeMemberFromGroup(groupId, userId);
-  }
-
-  @Put('groups/:groupId/members/:userId/role')
-  async updateGroupMembershipRole(
-    @Param('groupId') groupId: string,
-    @Param('userId') userId: string,
-    @Body() body: { role: string },
-  ): Promise<GroupMembership> {
-    return this.coursesService.updateGroupMembershipRole(
-      groupId,
-      userId,
-      body.role,
-    );
-  }
-
-  @Get('groups/:groupId/members')
-  async getGroupMembers(@Param('groupId') groupId: string): Promise<GroupMembership[]> {
-    return this.coursesService.getGroupMembers(groupId);
-  }
-
-  @Get('courses/:courseId/users/:userId/groups')
-  async getGroupsForUser(
-    @Param('courseId') courseId: string,
-    @Param('userId') userId: string,
-  ): Promise<CourseGroup[]> {
-    return this.coursesService.getGroupsForUser(courseId, userId);
-  }
-
-  @Get('groups/:groupId/members/:userId')
-  async getGroupMembership(
-    @Param('groupId') groupId: string,
-    @Param('userId') userId: string,
-  ): Promise<GroupMembership> {
-    return this.coursesService.getGroupMembership(groupId, userId);
-  }
-
-  @Post('groups/:groupId/grade')
-  async assignGroupGrade(
-    @Param('groupId') groupId: string,
-    @Body() body: {
-      grade: number;
-      feedback: string;
-      updatedBy: string;
-    },
-  ): Promise<CourseGroup> {
-    return this.coursesService.assignGroupGrade(
-      groupId,
-      body.grade,
-      body.feedback,
-      body.updatedBy,
-    );
-  }
-
-  @Post('groups/:groupId/members/:userId/grade')
-  async assignIndividualGrade(
-    @Param('groupId') groupId: string,
-    @Param('userId') userId: string,
-    @Body() body: {
-      grade: number;
-      feedback: string;
-    },
-  ): Promise<GroupMembership> {
-    return this.coursesService.assignIndividualGrade(
-      groupId,
-      userId,
-      body.grade,
-      body.feedback,
-    );
-  }
-
-  @Get('groups/:groupId/performance')
-  async getGroupPerformance(@Param('groupId') groupId: string): Promise<any> {
-    return this.coursesService.getGroupPerformance(groupId);
-  }
-
-  @Post('courses/:courseId/groups/auto-create')
-  async autoCreateWorkgroups(
-    @Param('courseId') courseId: string,
-    @Body() body: {
-      groupSize: number;
-      groupPrefix: string;
-      createdBy: string;
-    },
-  ): Promise<CourseGroup[]> {
-    return this.coursesService.autoCreateWorkgroups(
+    return this.coursesService.deleteStudyGroup(
       courseId,
-      body.groupSize,
-      body.groupPrefix,
-      body.createdBy,
+      runId,
+      groupId,
+      getRequestActor(request).userId,
     );
   }
 
-  @Get('groups/:groupId/courses/:courseId/progress')
-  async getGroupLearningProgress(
-    @Param('groupId') groupId: string,
+  @Post(':courseId/runs/:runId/groups/:groupId/members')
+  async addStudyGroupMember(
     @Param('courseId') courseId: string,
-  ): Promise<any> {
-    return this.coursesService.getGroupLearningProgress(groupId, courseId);
+    @Param('runId') runId: string,
+    @Param('groupId') groupId: string,
+    @Body() body: AddStudyGroupMemberDto,
+    @Req() request: Request,
+  ): Promise<StudyGroupResponseDto> {
+    return this.coursesService.addStudyGroupMember(
+      courseId,
+      runId,
+      groupId,
+      body,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Delete(':courseId/runs/:runId/groups/:groupId/members/:studentId')
+  async removeStudyGroupMember(
+    @Param('courseId') courseId: string,
+    @Param('runId') runId: string,
+    @Param('groupId') groupId: string,
+    @Param('studentId') studentId: string,
+    @Req() request: Request,
+  ): Promise<StudyGroupResponseDto> {
+    return this.coursesService.removeStudyGroupMember(
+      courseId,
+      runId,
+      groupId,
+      studentId,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Post('tasks/:taskId/group/start')
+  async startGroupLearningTask(
+    @Param('taskId') taskId: string,
+    @Req() request: Request,
+  ): Promise<LearningPathResponseDto> {
+    return this.coursesService.startGroupLearningTask(
+      taskId,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Post('tasks/:taskId/group/submit')
+  async submitGroupLearningTask(
+    @Param('taskId') taskId: string,
+    @Body() body: SubmitLearningTaskDto,
+    @Req() request: Request,
+  ): Promise<LearningPathResponseDto> {
+    return this.coursesService.submitGroupLearningTask(
+      taskId,
+      body,
+      getRequestActor(request).userId,
+    );
+  }
+
+  @Put(':courseId/runs/:runId/tasks/:taskId/groups/:groupId/manual-assessment')
+  async setManualGroupTaskAssessment(
+    @Param('courseId') courseId: string,
+    @Param('runId') runId: string,
+    @Param('taskId') taskId: string,
+    @Param('groupId') groupId: string,
+    @Body() body: ManualGroupTaskAssessmentDto,
+    @Req() request: Request,
+  ): Promise<TaskAssessmentResponseDto> {
+    return this.coursesService.setManualGroupTaskAssessment(
+      courseId,
+      runId,
+      taskId,
+      groupId,
+      body,
+      getRequestActor(request).userId,
+    );
   }
 
   // Calendar endpoints

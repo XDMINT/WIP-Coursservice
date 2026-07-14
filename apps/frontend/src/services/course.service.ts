@@ -3,6 +3,7 @@ import type CourseAndParticipationPL from '../model/course/CourseAndParticipatio
 import type Member from '../model/course/Member'
 import CourseRoles from '@/enums/CourseRoles'
 import { apiClient } from './apiClient'
+import type { TaskAssessmentStatus, TaskProgressStatus } from './learningTask.service'
 
 type CourseId = string | number
 
@@ -124,6 +125,33 @@ type BackendCourseVersion = {
   is_active?: boolean
 }
 
+type BackendAuditEvent = {
+  id: string
+  eventType?: string
+  event_type?: string
+  actorUserId?: string | null
+  actor_user_id?: string | null
+  actorRole?: string | null
+  actor_role?: string | null
+  courseId?: string | null
+  course_id?: string | null
+  courseRunId?: string | null
+  course_run_id?: string | null
+  courseVersionId?: string | null
+  course_version_id?: string | null
+  entityType?: string | null
+  entity_type?: string | null
+  entityId?: string | null
+  entity_id?: string | null
+  summary: string
+  metadataJson?: Record<string, unknown> | null
+  metadata_json?: Record<string, unknown> | null
+  requestId?: string | null
+  request_id?: string | null
+  createdAt?: string
+  created_at?: string
+}
+
 export type CoursePermissionKey = 'course.content.read' | 'course.content.manage' | 'course.manage' | 'course.members.manage' | 'course.results.own.read' | 'course.results.all.read'
 
 export type CourseContext = {
@@ -201,6 +229,71 @@ export type CourseRunPlan = {
   templateStrategy: CourseRunTemplateStrategy
   templateVersion?: CourseVersion | null
   regularPlanningAvailable: boolean
+}
+
+export type AuditEvent = {
+  id: string
+  eventType: string
+  actorUserId?: string | null
+  actorRole?: string | null
+  courseId?: string | null
+  courseRunId?: string | null
+  courseVersionId?: string | null
+  entityType?: string | null
+  entityId?: string | null
+  summary: string
+  metadataJson?: Record<string, unknown> | null
+  requestId?: string | null
+  createdAt: string
+}
+
+export type StudyGroupMember = {
+  studentId: string
+  role: 'MEMBER' | 'LEADER' | 'CO_LEADER'
+  joinedAt?: string | null
+}
+
+export type StudyGroupTaskProgress = {
+  id: string
+  taskId: string
+  groupId: string
+  status: TaskProgressStatus
+  startedAt?: string | null
+  submittedAt?: string | null
+  completedAt?: string | null
+  assessment?: {
+    id: string
+    taskId: string
+    groupId?: string | null
+    status: TaskAssessmentStatus
+    points?: number | null
+    maxPoints?: number | null
+    passed?: boolean | null
+    feedback?: string | null
+  } | null
+}
+
+export type StudyGroup = {
+  id: string
+  courseId: string
+  courseRunId?: string | null
+  name: string
+  description?: string | null
+  isActive: boolean
+  createdBy?: string | null
+  createdAt?: string
+  updatedAt?: string
+  members: StudyGroupMember[]
+  memberCount: number
+  taskProgress?: StudyGroupTaskProgress[]
+}
+
+export type AuditEventQuery = {
+  courseRunId?: string
+  eventType?: string
+  from?: string
+  to?: string
+  limit?: number
 }
 
 type BackendCourseContext = {
@@ -305,6 +398,22 @@ const mapCourseVersionFromBackend = (version: BackendCourseVersion): CourseVersi
   createdAt: version.createdAt ?? version.created_at ?? '',
   createdBy: version.createdBy ?? version.created_by ?? '',
   isActive: version.isActive ?? version.is_active ?? false
+})
+
+const mapAuditEventFromBackend = (event: BackendAuditEvent): AuditEvent => ({
+  id: event.id,
+  eventType: event.eventType ?? event.event_type ?? '',
+  actorUserId: event.actorUserId ?? event.actor_user_id,
+  actorRole: event.actorRole ?? event.actor_role,
+  courseId: event.courseId ?? event.course_id,
+  courseRunId: event.courseRunId ?? event.course_run_id,
+  courseVersionId: event.courseVersionId ?? event.course_version_id,
+  entityType: event.entityType ?? event.entity_type,
+  entityId: event.entityId ?? event.entity_id,
+  summary: event.summary,
+  metadataJson: event.metadataJson ?? event.metadata_json,
+  requestId: event.requestId ?? event.request_id,
+  createdAt: event.createdAt ?? event.created_at ?? ''
 })
 
 const mapCourseRunFromBackend = (run: BackendCourseRun): CourseRun => ({
@@ -554,6 +663,62 @@ class CourseService {
 
   async deleteCourseVersion(courseId: CourseId, courseRunId: string, versionId: string): Promise<void> {
     await apiClient.delete(`/courses/${courseId}/runs/${courseRunId}/versions/${versionId}`)
+  }
+
+  async listAuditEvents(courseId: CourseId, query: AuditEventQuery = {}): Promise<AuditEvent[]> {
+    const path = query.courseRunId
+      ? `/courses/${courseId}/runs/${query.courseRunId}/audit-events`
+      : `/courses/${courseId}/audit-events`
+    const response = await apiClient.get<MaybeListResponse<BackendAuditEvent>>(path, {
+      params: {
+        eventType: query.eventType || undefined,
+        from: query.from || undefined,
+        to: query.to || undefined,
+        limit: query.limit
+      }
+    })
+
+    return readListResponse(response.data, 'Audit-Ereignisse').map(mapAuditEventFromBackend)
+  }
+
+  async listStudyGroups(courseId: CourseId, courseRunId: string): Promise<StudyGroup[]> {
+    const response = await apiClient.get<MaybeListResponse<StudyGroup>>(`/courses/${courseId}/runs/${courseRunId}/groups`)
+
+    return readListResponse(response.data, 'Gruppen')
+  }
+
+  async getMyStudyGroup(courseId: CourseId, courseRunId: string): Promise<StudyGroup | null> {
+    const response = await apiClient.get<StudyGroup | null>(`/courses/${courseId}/runs/${courseRunId}/groups/my`)
+
+    return response.data
+  }
+
+  async createStudyGroup(courseId: CourseId, courseRunId: string, payload: { name: string; description?: string | null }): Promise<StudyGroup> {
+    const response = await apiClient.post<StudyGroup>(`/courses/${courseId}/runs/${courseRunId}/groups`, payload)
+
+    return response.data
+  }
+
+  async updateStudyGroup(courseId: CourseId, courseRunId: string, groupId: string, payload: { name?: string; description?: string | null }): Promise<StudyGroup> {
+    const response = await apiClient.put<StudyGroup>(`/courses/${courseId}/runs/${courseRunId}/groups/${groupId}`, payload)
+
+    return response.data
+  }
+
+  async deleteStudyGroup(courseId: CourseId, courseRunId: string, groupId: string): Promise<void> {
+    await apiClient.delete(`/courses/${courseId}/runs/${courseRunId}/groups/${groupId}`)
+  }
+
+  async addStudyGroupMember(courseId: CourseId, courseRunId: string, groupId: string, studentId: string | number): Promise<StudyGroup> {
+    const response = await apiClient.post<StudyGroup>(`/courses/${courseId}/runs/${courseRunId}/groups/${groupId}/members`, { studentId })
+
+    return response.data
+  }
+
+  async removeStudyGroupMember(courseId: CourseId, courseRunId: string, groupId: string, studentId: string | number): Promise<StudyGroup> {
+    const response = await apiClient.delete<StudyGroup>(`/courses/${courseId}/runs/${courseRunId}/groups/${groupId}/members/${studentId}`)
+
+    return response.data
   }
 
   getCourseMembersAsMap(courseId: CourseId, courseRunId?: string): Promise<Map<number, Member>> {

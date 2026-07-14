@@ -27,6 +27,11 @@ const taskStatusPresentation: Record<TaskProgressStatus, StatusPresentation> = {
     icon: 'mdi-progress-clock',
     label: 'Begonnen'
   },
+  [TaskProgressStatus.SUBMITTED]: {
+    color: 'info',
+    icon: 'mdi-file-clock-outline',
+    label: 'Wartet auf Bewertung'
+  },
   [TaskProgressStatus.LOCKED]: {
     color: 'status-locked',
     icon: 'mdi-lock-outline',

@@ -47,6 +47,10 @@
           <v-icon start> mdi-folder-multiple-outline </v-icon>
           Materialien
         </v-tab>
+        <v-tab value="gruppen">
+          <v-icon start> mdi-account-multiple-outline </v-icon>
+          Gruppen
+        </v-tab>
         <v-tab v-if="canReadResults" value="bewertungen">
           <v-icon start> mdi-school-outline </v-icon>
           Bewertung
@@ -62,6 +66,10 @@
         <v-tab v-if="canViewRunHistory" value="versionen">
           <v-icon start> mdi-history </v-icon>
           Inhaltsversionen
+        </v-tab>
+        <v-tab v-if="canViewAudit" value="audit">
+          <v-icon start> mdi-clipboard-search-outline </v-icon>
+          Audit
         </v-tab>
       </v-tabs>
 
@@ -109,6 +117,12 @@
         <v-tabs-window-item value="materialien">
           <v-card-text class="tab-content">
             <LearningMaterialsPanel :course-id="courseId" :can-manage="canManageContent" :course-run-id="selectedRunIdForContent" :course-version-id="selectedCourseVersionIdForContent" :read-only="isViewingHistoricalRun" />
+          </v-card-text>
+        </v-tabs-window-item>
+
+        <v-tabs-window-item value="gruppen">
+          <v-card-text class="tab-content">
+            <CourseGroupsPanel :course-id="courseId" :course-run-id="courseRunIdForGroups" :can-manage="canManageMembers" :read-only="isViewingHistoricalRun" />
           </v-card-text>
         </v-tabs-window-item>
 
@@ -169,6 +183,12 @@
             <CourseVersionsPanel :course-id="courseId" :can-manage="canManageCourse" :course-run-id="selectedRunIdForContent" :read-only="isViewingHistoricalRun" @active-version="handleActiveVersionSelected" @updated="loadSelectedRunVersion" />
           </v-card-text>
         </v-tabs-window-item>
+
+        <v-tabs-window-item v-if="canViewAudit" value="audit">
+          <v-card-text class="tab-content">
+            <AuditEventsPanel :course-id="courseId" :course-run-id="selectedRunIdForContent" />
+          </v-card-text>
+        </v-tabs-window-item>
       </v-tabs-window>
     </v-card>
   </div>
@@ -192,9 +212,11 @@ import { getApiErrorMessage, normalizeApiError } from '@/services/apiErrors'
 import CourseRoles from '@/enums/CourseRoles'
 import LearningMaterialsPanel from '@/components/course/LearningMaterialsPanel.vue'
 import LearningProcessPanel from '@/components/course/LearningProcessPanel.vue'
+import CourseGroupsPanel from '@/components/course/CourseGroupsPanel.vue'
 import CourseResultsPanel from '@/components/course/CourseResultsPanel.vue'
 import CourseRunsPanel from '@/components/course/CourseRunsPanel.vue'
 import CourseVersionsPanel from '@/components/course/CourseVersionsPanel.vue'
+import AuditEventsPanel from '@/components/course/AuditEventsPanel.vue'
 import type { CourseRun, CourseVersion } from '@/services/course.service'
 
 const route = useRoute()
@@ -228,6 +250,7 @@ const canManageMembers = computed(() => permissions.value['course.members.manage
 const canReadResults = computed(() => permissions.value['course.results.own.read'] === true || permissions.value['course.results.all.read'] === true)
 const canManageResults = computed(() => permissions.value['course.results.all.read'] === true)
 const canViewRunHistory = computed(() => canManageContent.value || canManageCourse.value)
+const canViewAudit = computed(() => canManageCourse.value)
 const displayedRun = computed(() => (canViewRunHistory.value ? (selectedRun.value ?? currentRun.value) : currentRun.value))
 const selectedRunIdForContent = computed(() => (canViewRunHistory.value ? displayedRun.value?.id : undefined))
 const displayedContentVersion = computed(() => {
@@ -239,6 +262,7 @@ const displayedContentVersion = computed(() => {
     : selectedRunVersion.value
 })
 const selectedCourseVersionIdForContent = computed(() => (canViewRunHistory.value ? displayedContentVersion.value?.id : undefined))
+const courseRunIdForGroups = computed(() => displayedRun.value?.id)
 const isViewingHistoricalRun = computed(() => canViewRunHistory.value && selectedRun.value != null && currentRun.value != null && selectedRun.value.id !== currentRun.value.id)
 const displayedContentVersionLabel = computed(() => {
   const version = displayedContentVersion.value
@@ -334,6 +358,12 @@ const activeTab = ref('details')
 
 watch(canViewRunHistory, (allowed) => {
   if (!allowed && (activeTab.value === 'durchlaeufe' || activeTab.value === 'versionen')) {
+    activeTab.value = 'details'
+  }
+})
+
+watch(canViewAudit, (allowed) => {
+  if (!allowed && activeTab.value === 'audit') {
     activeTab.value = 'details'
   }
 })
