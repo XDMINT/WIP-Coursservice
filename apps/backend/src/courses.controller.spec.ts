@@ -11,8 +11,28 @@ describe('CoursesController', () => {
     query: {},
   } as any;
   const service = {
+    activateCourseRun: jest.fn(),
+    activateCourseVersion: jest.fn(),
+    createCourseRun: jest.fn(),
+    createSpecialCourseRun: jest.fn(),
+    createCourseVersion: jest.fn(),
+    enrollInCourse: jest.fn(),
     findAll: jest.fn(),
     findOne: jest.fn(),
+    getAvailableCourses: jest.fn(),
+    getCourseMembersByRun: jest.fn(),
+    getCourseResultsByRun: jest.fn(),
+    getCourseVersion: jest.fn(),
+    getCurrentCourseRun: jest.fn(),
+    getEnrolledCourses: jest.fn(),
+    getLearningMaterialsByCourseRun: jest.fn(),
+    getLearningTaskProgressOverviewByRun: jest.fn(),
+    getCourseRun: jest.fn(),
+    getCourseRunPlan: jest.fn(),
+    getTasksByCourseRun: jest.fn(),
+    listCourseVersions: jest.fn(),
+    listCourseRuns: jest.fn(),
+    updateCourseRunPlanTemplate: jest.fn(),
     createCourse: jest.fn(),
     joinCourse: jest.fn(),
   };
@@ -62,6 +82,26 @@ describe('CoursesController', () => {
     expect(service.createCourse).toHaveBeenCalledWith(body, undefined);
   });
 
+  it('delegates actor-aware course catalogs to the service', async () => {
+    const actorRequest = {
+      ...request,
+      headers: {
+        'x-user-id': '3',
+      },
+    };
+    service.getEnrolledCourses.mockResolvedValue([{ id: 'enrolled-course' }]);
+    service.getAvailableCourses.mockResolvedValue([{ id: 'available-course' }]);
+
+    await expect(controller.getEnrolledCourses(actorRequest as any)).resolves.toEqual([
+      { id: 'enrolled-course' },
+    ]);
+    await expect(controller.getAvailableCourses(actorRequest as any)).resolves.toEqual([
+      { id: 'available-course' },
+    ]);
+    expect(service.getEnrolledCourses).toHaveBeenCalledWith('3');
+    expect(service.getAvailableCourses).toHaveBeenCalledWith('3');
+  });
+
   it('delegates joining a course to the service', async () => {
     service.joinCourse.mockResolvedValue({ id: 'enrollment-id' });
 
@@ -69,5 +109,163 @@ describe('CoursesController', () => {
       controller.joinCourse('course-id', { userId: 42, key: 'secret' }),
     ).resolves.toEqual({ id: 'enrollment-id' });
     expect(service.joinCourse).toHaveBeenCalledWith('course-id', 42, 'secret');
+  });
+
+  it('delegates actor-aware enrollment to the service', async () => {
+    const actorRequest = {
+      ...request,
+      headers: {
+        'x-user-id': '3',
+      },
+    };
+    service.enrollInCourse.mockResolvedValue({ id: 'enrollment-id' });
+
+    await expect(
+      controller.enrollCourse('course-id', { key: 'secret' }, actorRequest as any),
+    ).resolves.toEqual({ id: 'enrollment-id' });
+    expect(service.enrollInCourse).toHaveBeenCalledWith('course-id', '3', 'secret');
+  });
+
+  it('delegates course version routes to the service with the current actor', async () => {
+    const actorRequest = {
+      ...request,
+      headers: {
+        'x-user-id': '1',
+      },
+    };
+    service.listCourseVersions.mockResolvedValue([{ id: 'version-2' }]);
+    service.getCourseVersion.mockResolvedValue({ id: 'version-2' });
+    service.createCourseVersion.mockResolvedValue({ id: 'version-3' });
+    service.activateCourseVersion.mockResolvedValue({ id: 'version-1' });
+
+    await expect(controller.listCourseVersions('course-id', actorRequest as any)).resolves.toEqual([
+      { id: 'version-2' },
+    ]);
+    await expect(
+      controller.getCourseVersion('course-id', 'version-2', actorRequest as any),
+    ).resolves.toEqual({ id: 'version-2' });
+    await expect(
+      controller.createCourseVersion(
+        'course-id',
+        { changeSummary: 'Neu' },
+        actorRequest as any,
+      ),
+    ).resolves.toEqual({ id: 'version-3' });
+    await expect(
+      controller.activateCourseVersion('course-id', 'version-1', actorRequest as any),
+    ).resolves.toEqual({ id: 'version-1' });
+
+    expect(service.listCourseVersions).toHaveBeenCalledWith('course-id', '1');
+    expect(service.getCourseVersion).toHaveBeenCalledWith('course-id', 'version-2', '1');
+    expect(service.createCourseVersion).toHaveBeenCalledWith(
+      'course-id',
+      { changeSummary: 'Neu' },
+      '1',
+    );
+    expect(service.activateCourseVersion).toHaveBeenCalledWith(
+      'course-id',
+      'version-1',
+      '1',
+    );
+  });
+
+  it('delegates course run routes to the service with the current actor', async () => {
+    const actorRequest = {
+      ...request,
+      headers: {
+        'x-user-id': '1',
+      },
+    };
+    service.listCourseRuns.mockResolvedValue([{ id: 'run-2' }]);
+    service.getCurrentCourseRun.mockResolvedValue({ id: 'run-2' });
+    service.getCourseRun.mockResolvedValue({ id: 'run-1' });
+    service.getLearningMaterialsByCourseRun.mockResolvedValue([{ id: 'material-1' }]);
+    service.getTasksByCourseRun.mockResolvedValue([{ id: 'task-1' }]);
+    service.getCourseMembersByRun.mockResolvedValue([{ id: 'enrollment-1' }]);
+    service.getLearningTaskProgressOverviewByRun.mockResolvedValue([{ studentId: '3' }]);
+    service.getCourseResultsByRun.mockResolvedValue({ items: [], page: 1, pageSize: 10, total: 0 });
+    service.getCourseRunPlan.mockResolvedValue({ recurrenceType: 'SEMESTER' });
+    service.updateCourseRunPlanTemplate.mockResolvedValue({ templateStrategy: 'SPECIFIC_VERSION' });
+    service.createCourseRun.mockResolvedValue({ id: 'run-3' });
+    service.createSpecialCourseRun.mockResolvedValue({ id: 'run-special' });
+    service.activateCourseRun.mockResolvedValue({ id: 'run-3', isActive: true });
+
+    await expect(controller.listCourseRuns('course-id', actorRequest as any)).resolves.toEqual([
+      { id: 'run-2' },
+    ]);
+    await expect(controller.getCurrentCourseRun('course-id', actorRequest as any)).resolves.toEqual({
+      id: 'run-2',
+    });
+    await expect(
+      controller.getCourseRun('course-id', 'run-1', actorRequest as any),
+    ).resolves.toEqual({ id: 'run-1' });
+    await expect(
+      controller.getLearningMaterialsByCourseRun('course-id', 'run-1', actorRequest as any),
+    ).resolves.toEqual([{ id: 'material-1' }]);
+    await expect(
+      controller.getTasksByCourseRun('course-id', 'run-1', actorRequest as any),
+    ).resolves.toEqual([{ id: 'task-1' }]);
+    await expect(
+      controller.getCourseMembersByRun('course-id', 'run-1', actorRequest as any),
+    ).resolves.toEqual([{ id: 'enrollment-1' }]);
+    await expect(
+      controller.getLearningTaskProgressOverviewByRun('course-id', 'run-1', actorRequest as any),
+    ).resolves.toEqual([{ studentId: '3' }]);
+    await expect(
+      controller.getCourseResultsByRun('course-id', 'run-1', { page: 1 }, actorRequest as any),
+    ).resolves.toEqual({ items: [], page: 1, pageSize: 10, total: 0 });
+    await expect(
+      controller.getCourseRunPlan('course-id', actorRequest as any),
+    ).resolves.toEqual({ recurrenceType: 'SEMESTER' });
+    await expect(
+      controller.updateCourseRunPlanTemplate(
+        'course-id',
+        { strategy: 'SPECIFIC_VERSION', sourceVersionId: 'version-2' } as any,
+        actorRequest as any,
+      ),
+    ).resolves.toEqual({ templateStrategy: 'SPECIFIC_VERSION' });
+    await expect(
+      controller.createNextCourseRun(
+        'course-id',
+        { status: 'PUBLISHED' } as any,
+        actorRequest as any,
+      ),
+    ).resolves.toEqual({ id: 'run-3' });
+    await expect(
+      controller.createSpecialCourseRun(
+        'course-id',
+        { label: 'Sonderdurchlauf' },
+        actorRequest as any,
+      ),
+    ).resolves.toEqual({ id: 'run-special' });
+    await expect(
+      controller.activateCourseRun('course-id', 'run-3', actorRequest as any),
+    ).resolves.toEqual({ id: 'run-3', isActive: true });
+
+    expect(service.listCourseRuns).toHaveBeenCalledWith('course-id', '1');
+    expect(service.getCurrentCourseRun).toHaveBeenCalledWith('course-id', '1');
+    expect(service.getCourseRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
+    expect(service.getLearningMaterialsByCourseRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
+    expect(service.getTasksByCourseRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
+    expect(service.getCourseMembersByRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
+    expect(service.getLearningTaskProgressOverviewByRun).toHaveBeenCalledWith('course-id', 'run-1', '1');
+    expect(service.getCourseResultsByRun).toHaveBeenCalledWith('course-id', 'run-1', { page: 1 }, '1');
+    expect(service.getCourseRunPlan).toHaveBeenCalledWith('course-id', '1');
+    expect(service.updateCourseRunPlanTemplate).toHaveBeenCalledWith(
+      'course-id',
+      { strategy: 'SPECIFIC_VERSION', sourceVersionId: 'version-2' },
+      '1',
+    );
+    expect(service.createCourseRun).toHaveBeenCalledWith(
+      'course-id',
+      { status: 'PUBLISHED' },
+      '1',
+    );
+    expect(service.createSpecialCourseRun).toHaveBeenCalledWith(
+      'course-id',
+      { label: 'Sonderdurchlauf' },
+      '1',
+    );
+    expect(service.activateCourseRun).toHaveBeenCalledWith('course-id', 'run-3', '1');
   });
 });

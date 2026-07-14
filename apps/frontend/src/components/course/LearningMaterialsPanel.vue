@@ -6,7 +6,11 @@
 
     <v-progress-linear v-if="loading" class="mb-4" color="primary" indeterminate />
 
-    <div v-if="canManage" class="management">
+    <v-alert v-if="readOnly" class="mb-4" type="info" variant="tonal">
+      Historischer Kursdurchlauf: Materialien werden schreibgeschützt angezeigt.
+    </v-alert>
+
+    <div v-if="canEdit" class="management">
       <v-expansion-panels v-model="managementPanel" variant="accordion">
         <v-expansion-panel value="upload">
           <v-expansion-panel-title>
@@ -29,6 +33,18 @@
               </v-col>
               <v-col cols="12" md="6">
                 <v-text-field v-model="uploadForm.tags" label="Tags" variant="underlined" />
+              </v-col>
+              <v-col cols="12" md="4">
+                <v-select v-model="uploadForm.releaseMode" :items="releaseModeOptions" label="Sichtbar ab" variant="underlined" />
+              </v-col>
+              <v-col v-if="uploadForm.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION" cols="12" md="4">
+                <v-select v-model="uploadForm.releaseAfterTaskId" :items="taskOptions" label="Nach Aufgabe" variant="underlined" :disabled="taskOptions.length === 0" />
+              </v-col>
+              <v-col v-if="uploadForm.releaseMode === LearningMaterialReleaseMode.SCHEDULED" cols="12" md="4">
+                <v-text-field v-model="uploadForm.releaseAt" label="Zeitpunkt" type="datetime-local" variant="underlined" />
+              </v-col>
+              <v-col v-if="uploadForm.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION && taskOptions.length === 0" cols="12">
+                <v-alert type="info" variant="tonal">In diesem Durchlauf gibt es noch keine Aufgaben für eine Freischaltung.</v-alert>
               </v-col>
             </v-row>
             <v-progress-linear v-if="uploadProgress > 0 && uploadProgress < 100" class="mb-3" color="primary" :model-value="uploadProgress" />
@@ -54,6 +70,18 @@
               </v-col>
               <v-col cols="12">
                 <v-text-field v-model="linkForm.description" label="Beschreibung" variant="underlined" />
+              </v-col>
+              <v-col cols="12" md="4">
+                <v-select v-model="linkForm.releaseMode" :items="releaseModeOptions" label="Sichtbar ab" variant="underlined" />
+              </v-col>
+              <v-col v-if="linkForm.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION" cols="12" md="4">
+                <v-select v-model="linkForm.releaseAfterTaskId" :items="taskOptions" label="Nach Aufgabe" variant="underlined" :disabled="taskOptions.length === 0" />
+              </v-col>
+              <v-col v-if="linkForm.releaseMode === LearningMaterialReleaseMode.SCHEDULED" cols="12" md="4">
+                <v-text-field v-model="linkForm.releaseAt" label="Zeitpunkt" type="datetime-local" variant="underlined" />
+              </v-col>
+              <v-col v-if="linkForm.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION && taskOptions.length === 0" cols="12">
+                <v-alert type="info" variant="tonal">In diesem Durchlauf gibt es noch keine Aufgaben für eine Freischaltung.</v-alert>
               </v-col>
             </v-row>
             <v-btn color="primary" prepend-icon="mdi-link-plus" :loading="savingLink" @click="submitLink"> Link speichern </v-btn>
@@ -93,18 +121,24 @@
       </template>
 
       <template #[`item.publicationStatus`]="{ item }">
-        <v-chip :color="item.isPublished ? 'success' : 'status-locked'" label size="small">
+        <v-chip :color="item.isPublished && !item.locked ? 'success' : 'status-locked'" label size="small">
           <v-icon start>
-            {{ item.isPublished ? 'mdi-check-circle-outline' : 'mdi-file-lock-outline' }}
+            {{ item.isPublished && !item.locked ? 'mdi-check-circle-outline' : 'mdi-file-lock-outline' }}
           </v-icon>
-          {{ item.isPublished ? 'Freigegeben' : 'Entwurf' }}
+          {{ visibilityLabel(item) }}
         </v-chip>
+        <div v-if="item.lockedReason" class="visibility-note">
+          {{ item.lockedReason }}
+        </div>
+        <div v-else-if="canManage && !item.visibleForStudents" class="visibility-note">
+          {{ teacherReleaseHint(item) }}
+        </div>
       </template>
 
       <template #[`item.actions`]="{ item, index }">
         <div class="actions">
-          <v-btn icon="mdi-open-in-new" size="small" variant="text" @click="openMaterial(item)" />
-          <template v-if="canManage">
+          <v-btn icon="mdi-open-in-new" size="small" variant="text" :disabled="item.locked" @click="openMaterial(item)" />
+          <template v-if="canEdit">
             <v-btn icon="mdi-pencil" size="small" variant="text" @click="openEditDialog(item)" />
             <v-btn :icon="item.isPublished ? 'mdi-eye-off' : 'mdi-eye'" size="small" variant="text" @click="togglePublication(item)" />
             <v-btn icon="mdi-arrow-up" size="small" variant="text" :disabled="index === 0" @click="moveMaterial(index, -1)" />
@@ -115,7 +149,7 @@
       </template>
 
       <template #no-data>
-        <v-empty-state icon="mdi-folder-open-outline" title="Keine Lernmaterialien vorhanden" text="Für diesen Kurs wurden noch keine freigegebenen Lernmaterialien gefunden." />
+        <v-empty-state icon="mdi-folder-open-outline" title="Keine Lernmaterialien vorhanden" :text="emptyStateText" />
       </template>
     </v-data-table>
 
@@ -127,6 +161,10 @@
           <v-text-field v-model="editForm.description" label="Beschreibung" variant="underlined" />
           <v-text-field v-if="editForm.type === LearningMaterialType.EXTERNAL_LINK" v-model="editForm.url" label="URL" variant="underlined" />
           <v-text-field v-model="editForm.tags" label="Tags" variant="underlined" />
+          <v-select v-model="editForm.releaseMode" :items="releaseModeOptions" label="Sichtbar ab" variant="underlined" />
+          <v-select v-if="editForm.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION" v-model="editForm.releaseAfterTaskId" :items="taskOptions" label="Nach Aufgabe" variant="underlined" :disabled="taskOptions.length === 0" />
+          <v-alert v-if="editForm.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION && taskOptions.length === 0" type="info" variant="tonal">In diesem Durchlauf gibt es noch keine Aufgaben für eine Freischaltung.</v-alert>
+          <v-text-field v-if="editForm.releaseMode === LearningMaterialReleaseMode.SCHEDULED" v-model="editForm.releaseAt" label="Zeitpunkt" type="datetime-local" variant="underlined" />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -143,13 +181,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import learningMaterialService, { LearningMaterialPublicationStatus, LearningMaterialType, type LearningMaterial, formatLearningMaterialFileSize } from '@/services/learningMaterial.service'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import learningMaterialService, { LearningMaterialPublicationStatus, LearningMaterialReleaseMode, LearningMaterialType, type LearningMaterial, formatLearningMaterialFileSize } from '@/services/learningMaterial.service'
+import learningTaskService, { type LearningTask } from '@/services/learningTask.service'
 import { getApiErrorMessage } from '@/services/apiErrors'
 
 const props = defineProps<{
   courseId: string
   canManage: boolean
+  courseRunId?: string
+  courseVersionId?: string
+  readOnly?: boolean
 }>()
 
 const loading = ref(false)
@@ -162,12 +204,16 @@ const successMessage = ref('')
 const uploadProgress = ref(0)
 const managementPanel = ref<string | undefined>(undefined)
 const materials = ref<LearningMaterial[]>([])
+const releaseTasks = ref<LearningTask[]>([])
 const editDialog = ref(false)
 const editingMaterialId = ref<string | null>(null)
 
 const uploadForm = reactive({
   description: '',
   file: null as File | File[] | null,
+  releaseAfterTaskId: null as string | null,
+  releaseAt: '',
+  releaseMode: LearningMaterialReleaseMode.IMMEDIATE,
   tags: '',
   title: '',
   type: LearningMaterialType.DOCUMENT
@@ -175,6 +221,9 @@ const uploadForm = reactive({
 
 const linkForm = reactive({
   description: '',
+  releaseAfterTaskId: null as string | null,
+  releaseAt: '',
+  releaseMode: LearningMaterialReleaseMode.IMMEDIATE,
   tags: '',
   title: '',
   url: ''
@@ -182,6 +231,9 @@ const linkForm = reactive({
 
 const editForm = reactive({
   description: '',
+  releaseAfterTaskId: null as string | null,
+  releaseAt: '',
+  releaseMode: LearningMaterialReleaseMode.IMMEDIATE,
   tags: '',
   title: '',
   type: LearningMaterialType.DOCUMENT,
@@ -189,12 +241,32 @@ const editForm = reactive({
 })
 
 const fileTypeOptions = [LearningMaterialType.DOCUMENT, LearningMaterialType.PRESENTATION, LearningMaterialType.VIDEO, LearningMaterialType.OTHER_FILE]
+const releaseModeOptions = [
+  { title: 'Sofort sichtbar', value: LearningMaterialReleaseMode.IMMEDIATE },
+  { title: 'Nach Aufgabe', value: LearningMaterialReleaseMode.AFTER_TASK_COMPLETION },
+  { title: 'Ab Zeitpunkt', value: LearningMaterialReleaseMode.SCHEDULED }
+]
 
-const headers = computed(() => [{ title: 'Typ', key: 'type', sortable: false }, { title: 'Titel', key: 'title' }, { title: 'Tags', key: 'tags', sortable: false }, { title: 'Größe', key: 'fileSize' }, { title: 'Freigabe', key: 'publishedAt' }, ...(props.canManage ? [{ title: 'Status', key: 'publicationStatus' }] : []), { title: '', key: 'actions', sortable: false, align: 'end' as const }])
+const headers = computed(() => [{ title: 'Typ', key: 'type', sortable: false }, { title: 'Titel', key: 'title' }, { title: 'Tags', key: 'tags', sortable: false }, { title: 'Größe', key: 'fileSize' }, { title: 'Freigabe', key: 'publishedAt' }, { title: 'Sichtbarkeit', key: 'publicationStatus' }, { title: '', key: 'actions', sortable: false, align: 'end' as const }])
+const canEdit = computed(() => props.canManage && props.readOnly !== true)
+const readOnly = computed(() => props.canManage && props.readOnly === true)
+const effectiveCourseRunId = computed(() => (props.canManage ? props.courseRunId : undefined))
+const effectiveCourseVersionId = computed(() => (props.canManage ? props.courseVersionId : undefined))
+const emptyStateText = computed(() => (effectiveCourseRunId.value ? 'In diesem Kursdurchlauf sind keine Materialien vorhanden.' : 'Für diesen Kurs wurden noch keine freigegebenen Lernmaterialien gefunden.'))
+const taskOptions = computed(() => releaseTasks.value.map((task) => ({ title: `${task.order}. ${task.title}`, value: task.id })))
 
 onMounted(() => {
   loadMaterials()
+  loadReleaseTasks()
 })
+
+watch(
+  () => [props.courseId, effectiveCourseRunId.value, effectiveCourseVersionId.value, props.canManage, props.readOnly],
+  () => {
+    loadMaterials()
+    loadReleaseTasks()
+  }
+)
 
 const parseTags = (tags: string): string[] =>
   tags
@@ -211,12 +283,41 @@ const setError = (error: unknown) => {
   errorMessage.value = getApiErrorMessage(error)
 }
 
+const releasePayload = (form: { releaseMode: LearningMaterialReleaseMode; releaseAt: string; releaseAfterTaskId: string | null }) => ({
+  releaseMode: form.releaseMode,
+  releaseAt: form.releaseMode === LearningMaterialReleaseMode.SCHEDULED && form.releaseAt ? new Date(form.releaseAt).toISOString() : null,
+  releaseAfterTaskId: form.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION ? form.releaseAfterTaskId : null
+})
+
+const validateReleaseForm = (form: { releaseMode: LearningMaterialReleaseMode; releaseAt: string; releaseAfterTaskId: string | null }) => {
+  if (form.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION && !form.releaseAfterTaskId) {
+    errorMessage.value = 'Bitte wähle eine Aufgabe für die Freischaltung aus.'
+    return false
+  }
+
+  if (form.releaseMode === LearningMaterialReleaseMode.SCHEDULED && !form.releaseAt) {
+    errorMessage.value = 'Bitte wähle Datum und Uhrzeit für die Freischaltung aus.'
+    return false
+  }
+
+  return true
+}
+
+const toDateTimeLocal = (value?: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000
+
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
+}
+
 const loadMaterials = () => {
   loading.value = true
   errorMessage.value = ''
+  materials.value = []
 
   learningMaterialService
-    .listMaterials(props.courseId)
+    .listMaterials(props.courseId, effectiveCourseRunId.value, effectiveCourseVersionId.value)
     .then((response) => {
       materials.value = response
     })
@@ -224,6 +325,20 @@ const loadMaterials = () => {
     .finally(() => {
       loading.value = false
     })
+}
+
+const loadReleaseTasks = () => {
+  if (!canEdit.value) {
+    releaseTasks.value = []
+    return
+  }
+
+  learningTaskService
+    .listTasks(props.courseId, effectiveCourseRunId.value, effectiveCourseVersionId.value)
+    .then((response) => {
+      releaseTasks.value = response
+    })
+    .catch(setError)
 }
 
 const selectedUploadFile = computed(() => {
@@ -235,8 +350,17 @@ const selectedUploadFile = computed(() => {
 })
 
 const submitUpload = () => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Materialien historischer Durchläufe können nicht bearbeitet werden.'
+    return
+  }
+
   if (!uploadForm.title || selectedUploadFile.value == null) {
     errorMessage.value = 'Titel und Datei sind erforderlich.'
+    return
+  }
+
+  if (!validateReleaseForm(uploadForm)) {
     return
   }
 
@@ -250,6 +374,7 @@ const submitUpload = () => {
       {
         description: uploadForm.description,
         file: selectedUploadFile.value,
+        ...releasePayload(uploadForm),
         tags: parseTags(uploadForm.tags),
         title: uploadForm.title,
         type: uploadForm.type
@@ -261,6 +386,9 @@ const submitUpload = () => {
     .then(() => {
       uploadForm.description = ''
       uploadForm.file = null
+      uploadForm.releaseAfterTaskId = null
+      uploadForm.releaseAt = ''
+      uploadForm.releaseMode = LearningMaterialReleaseMode.IMMEDIATE
       uploadForm.tags = ''
       uploadForm.title = ''
       uploadProgress.value = 100
@@ -274,8 +402,17 @@ const submitUpload = () => {
 }
 
 const submitLink = () => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Materialien historischer Durchläufe können nicht bearbeitet werden.'
+    return
+  }
+
   if (!linkForm.title || !linkForm.url) {
     errorMessage.value = 'Titel und URL sind erforderlich.'
+    return
+  }
+
+  if (!validateReleaseForm(linkForm)) {
     return
   }
 
@@ -285,6 +422,7 @@ const submitLink = () => {
   learningMaterialService
     .createExternalLink(props.courseId, {
       description: linkForm.description,
+      ...releasePayload(linkForm),
       tags: parseTags(linkForm.tags),
       title: linkForm.title,
       type: LearningMaterialType.EXTERNAL_LINK,
@@ -292,6 +430,9 @@ const submitLink = () => {
     })
     .then(() => {
       linkForm.description = ''
+      linkForm.releaseAfterTaskId = null
+      linkForm.releaseAt = ''
+      linkForm.releaseMode = LearningMaterialReleaseMode.IMMEDIATE
       linkForm.tags = ''
       linkForm.title = ''
       linkForm.url = ''
@@ -305,6 +446,11 @@ const submitLink = () => {
 }
 
 const openMaterial = (material: LearningMaterial) => {
+  if (material.locked) {
+    errorMessage.value = material.lockedReason ?? 'Dieses Material ist noch gesperrt.'
+    return
+  }
+
   if (material.type === LearningMaterialType.EXTERNAL_LINK && material.url) {
     window.open(material.url, '_blank', 'noopener')
     return
@@ -324,8 +470,13 @@ const openMaterial = (material: LearningMaterial) => {
 }
 
 const openEditDialog = (material: LearningMaterial) => {
+  if (!canEdit.value) return
+
   editingMaterialId.value = material.id
   editForm.description = material.description ?? ''
+  editForm.releaseAfterTaskId = material.releaseAfterTaskId ?? null
+  editForm.releaseAt = toDateTimeLocal(material.releaseAt)
+  editForm.releaseMode = material.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE
   editForm.tags = material.tags.join(', ')
   editForm.title = material.title
   editForm.type = material.type
@@ -334,8 +485,17 @@ const openEditDialog = (material: LearningMaterial) => {
 }
 
 const saveEdit = () => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Materialien historischer Durchläufe können nicht bearbeitet werden.'
+    return
+  }
+
   if (!editingMaterialId.value || !editForm.title) {
     errorMessage.value = 'Titel ist erforderlich.'
+    return
+  }
+
+  if (!validateReleaseForm(editForm)) {
     return
   }
 
@@ -345,6 +505,7 @@ const saveEdit = () => {
   learningMaterialService
     .updateMaterial(editingMaterialId.value, {
       description: editForm.description,
+      ...releasePayload(editForm),
       tags: parseTags(editForm.tags),
       title: editForm.title,
       type: editForm.type,
@@ -362,6 +523,8 @@ const saveEdit = () => {
 }
 
 const togglePublication = (material: LearningMaterial) => {
+  if (!canEdit.value) return
+
   const request = material.publicationStatus === LearningMaterialPublicationStatus.PUBLISHED ? learningMaterialService.withdrawMaterial(material.id) : learningMaterialService.publishMaterial(material.id)
 
   request
@@ -373,6 +536,8 @@ const togglePublication = (material: LearningMaterial) => {
 }
 
 const moveMaterial = (index: number, direction: number) => {
+  if (!canEdit.value) return
+
   const targetIndex = index + direction
 
   if (targetIndex < 0 || targetIndex >= materials.value.length) {
@@ -396,6 +561,8 @@ const moveMaterial = (index: number, direction: number) => {
 }
 
 const deleteMaterial = (material: LearningMaterial) => {
+  if (!canEdit.value) return
+
   if (!window.confirm(`Material "${material.title}" löschen?`)) {
     return
   }
@@ -418,10 +585,37 @@ const materialTypeLabel = (type: LearningMaterialType): string =>
     [LearningMaterialType.OTHER_FILE]: 'Datei'
   })[type]
 
+const visibilityLabel = (material: LearningMaterial): string => {
+  if (!material.isPublished) return 'Entwurf'
+  if (material.locked) return 'Gesperrt'
+  if (props.canManage && !material.visibleForStudents) return 'Bedingt sichtbar'
+  return 'Freigegeben'
+}
+
+const teacherReleaseHint = (material: LearningMaterial): string => {
+  if (material.releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION) {
+    return material.releaseAfterTaskTitle ? `Nach Aufgabe "${material.releaseAfterTaskTitle}" sichtbar.` : 'Nach erfolgreichem Aufgabenabschluss sichtbar.'
+  }
+
+  if (material.releaseMode === LearningMaterialReleaseMode.SCHEDULED && material.releaseAt) {
+    return `Ab ${formatDateTime(material.releaseAt)} sichtbar.`
+  }
+
+  return 'Noch nicht für Studierende sichtbar.'
+}
+
 const formatDate = (date?: string): string => {
   if (!date) return ''
   return new Intl.DateTimeFormat('de-DE', {
     dateStyle: 'medium'
+  }).format(new Date(date))
+}
+
+const formatDateTime = (date?: string): string => {
+  if (!date) return ''
+  return new Intl.DateTimeFormat('de-DE', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
   }).format(new Date(date))
 }
 
@@ -454,6 +648,14 @@ defineExpose({
 .material-title span {
   color: rgb(var(--v-theme-on-surface-variant));
   font-size: 0.875rem;
+}
+
+.visibility-note {
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 0.8rem;
+  line-height: 1.35;
+  margin-top: 4px;
+  max-width: 260px;
 }
 
 .tags,

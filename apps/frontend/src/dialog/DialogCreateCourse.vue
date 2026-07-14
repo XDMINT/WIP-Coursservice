@@ -15,7 +15,13 @@
             </v-col>
             <v-col>
               <v-select v-model="course.semester" color="primary" variant="underlined" label="Semester" :rules="[(v: any) => !!v || 'Semester is required']" required :items="semesters" item-title="name" return-object />
+              <v-select v-model="course.recurrenceType" color="primary" variant="underlined" label="Rhythmus" :items="recurrenceOptions" item-title="title" item-value="value" :rules="[(v: any) => !!v || 'Rhythmus is required']" required />
               <v-select v-model="course.location" color="primary" variant="underlined" label="Standort" :items="['Friedberg', 'Gießen']" :rules="[(v: any) => !!v || 'Standort is required']" required />
+              <template v-if="newCourse">
+                <v-text-field v-model="course.initialRunLabel" color="primary" variant="underlined" label="Erster Durchlauf" />
+                <v-text-field v-model="course.initialRunStartDate" color="primary" variant="underlined" label="Startdatum" type="date" />
+                <v-text-field v-model="course.initialRunEndDate" color="primary" variant="underlined" label="Enddatum" type="date" />
+              </template>
             </v-col>
           </v-row>
         </v-card-text>
@@ -52,6 +58,11 @@ const authUserStore = useAuthUserStore()
 const router = useRouter()
 
 const semesters = ref<Semester[]>([])
+const recurrenceOptions = [
+  { title: 'Semesterweise', value: 'SEMESTER' },
+  { title: 'Jährlich', value: 'YEARLY' },
+  { title: 'Dauerhaft', value: 'CONTINUOUS' }
+]
 
 // New Course or editing existing course
 const newCourse = ref(true)
@@ -109,6 +120,23 @@ const resetDialog = () => {
 }
 
 const initializeDialogForNewCourse = () => {
+  course.value = {
+    id: '',
+    name: '',
+    description: '',
+    active: true,
+    status: 'PUBLISHED',
+    recurrenceType: 'SEMESTER',
+    creationDate: '',
+    semester: semesters.value[0],
+    owner: authUserStore.auth.user?.id ?? 0,
+    keyPassword: '',
+    requiresEnrollmentKey: false,
+    location: '',
+    initialRunLabel: '',
+    initialRunStartDate: '',
+    initialRunEndDate: ''
+  } as CoursePL
   dialogTitle.value = 'Neuen Kurs erstellen'
 }
 

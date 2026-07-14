@@ -134,11 +134,12 @@ const passThroughStub = {
   template: '<div><slot /></div>'
 }
 
-const mountPanel = (canManage = false) =>
+const mountPanel = (canManage = false, extraProps: Partial<InstanceType<typeof LearningProcessPanel>['$props']> = {}) =>
   mount(LearningProcessPanel, {
     props: {
       canManage,
-      courseId: 'course-id'
+      courseId: 'course-id',
+      ...extraProps
     },
     global: {
       stubs: {
@@ -337,6 +338,23 @@ describe('LearningProcessPanel', () => {
     expect(learningTaskServiceMock.getProgressOverview).toHaveBeenCalledTimes(1)
   })
 
+  it('loads historical teacher data by run and disables editing actions', async () => {
+    learningTaskServiceMock.listTasks.mockResolvedValue(baseTasks)
+    learningTaskServiceMock.getProgressOverview.mockResolvedValue(createProgressOverview())
+
+    const wrapper = mountPanel(true, {
+      courseRunId: 'run-1',
+      readOnly: true
+    })
+    await flushPromises()
+
+    expect(learningTaskServiceMock.listTasks).toHaveBeenCalledWith('course-id', 'run-1', undefined)
+    expect(learningTaskServiceMock.getProgressOverview).toHaveBeenCalledWith('course-id', 'run-1')
+    expect(wrapper.text()).toContain('Historischer Kursdurchlauf')
+    expect(wrapper.text()).not.toContain('Neue Aufgabe')
+    expect(wrapper.text()).not.toContain('Freischalten')
+  })
+
   it('keeps the teacher overview unchanged when manual unlock fails', async () => {
     learningTaskServiceMock.listTasks.mockResolvedValue(baseTasks)
     learningTaskServiceMock.getProgressOverview.mockResolvedValue(createProgressOverview())
@@ -387,5 +405,22 @@ describe('LearningProcessPanel', () => {
     expect(wrapper.text()).toContain('Abschlussaufgabe bearbeiten')
     expect(wrapper.text()).toContain('Verfügbar')
     expect(wrapper.text()).not.toContain('Noch keine Aufgaben verfügbar.')
+  })
+
+  it('ignores selected run ids for students and loads their active learning path', async () => {
+    learningTaskServiceMock.getMyLearningPath.mockResolvedValueOnce(
+      createPath({
+        'task-1': TaskProgressStatus.AVAILABLE
+      })
+    )
+
+    mountPanel(false, {
+      courseRunId: 'historical-run'
+    })
+    await flushPromises()
+
+    expect(learningTaskServiceMock.getMyLearningPath).toHaveBeenCalledWith('course-id')
+    expect(learningTaskServiceMock.listTasks).not.toHaveBeenCalled()
+    expect(learningTaskServiceMock.getProgressOverview).not.toHaveBeenCalled()
   })
 })

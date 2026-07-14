@@ -18,6 +18,7 @@ import {
 } from 'typeorm';
 
 import { Course } from './course.entity';
+import { CourseRun } from './course-run.entity';
 import { Grade } from './grade.entity';
 import { TaskProgress } from './task-progress.entity';
 import { CourseResult } from './course-result.entity';
@@ -65,6 +66,16 @@ export class Enrollment {
     })
     @JoinColumn({ name: 'course_id' })
     course: Course;
+
+    @Column({ name: 'course_run_id', type: 'uuid', nullable: true })
+    courseRunId?: string;
+
+    @ManyToOne(() => CourseRun, (run) => run.enrollments, {
+        nullable: true,
+        onDelete: 'CASCADE',
+    })
+    @JoinColumn({ name: 'course_run_id' })
+    courseRun?: CourseRun;
 
     /**
      * ID of the user who is enrolled

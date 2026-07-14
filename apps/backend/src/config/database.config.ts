@@ -7,6 +7,7 @@ import { ContentRelease } from '../entities/content-release.entity';
 import { ContentTemplate } from '../entities/content-template.entity';
 import { CourseGroup } from '../entities/course-group.entity';
 import { CourseResult } from '../entities/course-result.entity';
+import { CourseRun } from '../entities/course-run.entity';
 import { CourseVersion } from '../entities/course-version.entity';
 import { Course } from '../entities/course.entity';
 import { Enrollment } from '../entities/enrollment.entity';
@@ -21,9 +22,17 @@ import { ExpandLearningMaterials1720000002000 } from '../migrations/172000000200
 import { ExpandLearningProcess1720000003000 } from '../migrations/1720000003000-ExpandLearningProcess';
 import { HardenTaskProgressPersistence1720000004000 } from '../migrations/1720000004000-HardenTaskProgressPersistence';
 import { AddCourseResults1720000005000 } from '../migrations/1720000005000-AddCourseResults';
+import { HardenCourseVersions1720000006000 } from '../migrations/1720000006000-HardenCourseVersions';
+import { AddCourseRuns1720000007000 } from '../migrations/1720000007000-AddCourseRuns';
+import { ScopeTaskDemoKeyToCourseRun1720000008000 } from '../migrations/1720000008000-ScopeTaskDemoKeyToCourseRun';
+import { AddLearningMaterialReleaseRules1720000009000 } from '../migrations/1720000009000-AddLearningMaterialReleaseRules';
+import { AddCourseVersionTemplateMetadata1720000010000 } from '../migrations/1720000010000-AddCourseVersionTemplateMetadata';
+import { LinkContentToCourseVersions1720000011000 } from '../migrations/1720000011000-LinkContentToCourseVersions';
+import { AddCourseRunPlanTemplateSettings1720000012000 } from '../migrations/1720000012000-AddCourseRunPlanTemplateSettings';
 
 const entities = [
   Course,
+  CourseRun,
   CourseVersion,
   Enrollment,
   CourseGroup,
@@ -67,6 +76,13 @@ export const createDatabaseOptions = (
     ExpandLearningProcess1720000003000,
     HardenTaskProgressPersistence1720000004000,
     AddCourseResults1720000005000,
+    HardenCourseVersions1720000006000,
+    AddCourseRuns1720000007000,
+    ScopeTaskDemoKeyToCourseRun1720000008000,
+    AddLearningMaterialReleaseRules1720000009000,
+    AddCourseVersionTemplateMetadata1720000010000,
+    LinkContentToCourseVersions1720000011000,
+    AddCourseRunPlanTemplateSettings1720000012000,
   ],
   migrationsRun: parseBoolean(
     configService.get<string>('DATABASE_MIGRATIONS_RUN'),

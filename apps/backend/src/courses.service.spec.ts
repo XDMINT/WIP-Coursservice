@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 
 import { CoursesService } from './courses.service';
 import { Course, CourseStatus } from './entities/course.entity';
+import { CourseRun, CourseRunStatus } from './entities/course-run.entity';
 import { CourseMemberRole, Enrollment } from './entities/enrollment.entity';
 
 const emptyRepository = () => ({
@@ -29,20 +30,48 @@ const createCourse = (overrides: Partial<Course> = {}): Course =>
 const createEnrollment = (
   userId: string,
   role: CourseMemberRole,
+  courseRun?: CourseRun,
 ): Enrollment =>
   ({
     id: `enrollment-${userId}`,
     courseId: 'course-id',
+    courseRunId: courseRun?.id,
+    courseRun,
     userId,
     role,
     enrolledAt: new Date('2026-01-01T11:00:00.000Z'),
     updatedAt: new Date('2026-01-01T11:00:00.000Z'),
   }) as Enrollment;
 
+const createCourseRun = (course: Course): CourseRun =>
+  ({
+    id: 'course-run-id',
+    courseId: course.id,
+    course,
+    label: 'Sommersemester 2026',
+    startDate: '2026-04-01',
+    endDate: '2026-09-30',
+    status: CourseRunStatus.PUBLISHED,
+    isActive: true,
+    createdBy: '1',
+    createdAt: new Date('2026-01-01T10:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T10:00:00.000Z'),
+  }) as CourseRun;
+
+const matchesWhere = (item: any, where: Record<string, any> = {}) =>
+  Object.entries(where).every(([key, expected]) => item[key] === expected);
+
 const createService = (
   course: Course,
   enrollments: Enrollment[],
 ) => {
+  const currentRun = createCourseRun(course);
+  enrollments.forEach((enrollment) => {
+    if (enrollment.courseId === course.id && !enrollment.courseRunId) {
+      enrollment.courseRunId = currentRun.id;
+      enrollment.courseRun = currentRun;
+    }
+  });
   const courseRepository = {
     delete: jest.fn().mockResolvedValue({ affected: 1 }),
     find: jest.fn().mockResolvedValue([course]),
@@ -66,25 +95,34 @@ const createService = (
       }),
     ),
   };
+  const courseRunRepository = {
+    delete: jest.fn(),
+    find: jest.fn(({ where } = {}) =>
+      Promise.resolve([currentRun].filter((entry) => matchesWhere(entry, where))),
+    ),
+    findOne: jest.fn(({ where } = {}) =>
+      Promise.resolve([currentRun].find((entry) => matchesWhere(entry, where)) ?? null),
+    ),
+    save: jest.fn((entity) => Promise.resolve(entity)),
+  };
   const enrollmentRepository = {
     delete: jest.fn().mockResolvedValue({ affected: 1 }),
     find: jest.fn(({ where }) =>
       Promise.resolve(
-        enrollments.filter((entry) => entry.courseId === where.courseId),
+        enrollments.filter((entry) => matchesWhere(entry, where)),
       ),
     ),
     findOne: jest.fn(({ where }) =>
       Promise.resolve(
-        enrollments.find(
-          (entry) =>
-            entry.courseId === where.courseId && entry.userId === where.userId,
-        ) ?? null,
+        enrollments.find((entry) => matchesWhere(entry, where)) ?? null,
       ),
     ),
     save: jest.fn((entity) => Promise.resolve(entity)),
   };
   const service = new CoursesService(
     courseRepository as any,
+    courseRunRepository as any,
+    emptyRepository() as any,
     emptyRepository() as any,
     emptyRepository() as any,
     emptyRepository() as any,

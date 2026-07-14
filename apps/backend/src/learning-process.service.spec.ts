@@ -2,6 +2,8 @@ import { HttpStatus } from '@nestjs/common';
 
 import { CoursesService } from './courses.service';
 import { Course, CourseStatus } from './entities/course.entity';
+import { CourseRun, CourseRunStatus } from './entities/course-run.entity';
+import { CourseVersion, CourseVersionStatus } from './entities/course-version.entity';
 import { CourseMemberRole, Enrollment } from './entities/enrollment.entity';
 import { Task, TaskUnlockMode } from './entities/task.entity';
 import {
@@ -32,6 +34,7 @@ const createEnrollment = (
   ({
     id: `enrollment-${userId}`,
     courseId: 'course-id',
+    courseRunId: 'course-run-id',
     userId,
     role,
     enrolledAt: new Date('2026-01-01T10:00:00.000Z'),
@@ -39,10 +42,27 @@ const createEnrollment = (
     ...overrides,
   }) as Enrollment;
 
+const createCourseRun = (course: Course, overrides: Partial<CourseRun> = {}): CourseRun =>
+  ({
+    id: `${course.id === 'course-id' ? 'course' : course.id}-run-id`,
+    courseId: course.id,
+    course,
+    label: 'Sommersemester 2026',
+    startDate: '2026-04-01',
+    endDate: '2026-09-30',
+    status: CourseRunStatus.PUBLISHED,
+    isActive: true,
+    createdBy: '1',
+    createdAt: new Date('2026-01-01T10:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T10:00:00.000Z'),
+    ...overrides,
+  }) as CourseRun;
+
 const createTask = (overrides: Partial<Task> = {}): Task =>
   ({
     id: 'task-id',
     courseId: 'course-id',
+    courseRunId: 'course-run-id',
     title: 'Task',
     description: 'Task description',
     type: 'DEMO_TASK',
@@ -58,22 +78,56 @@ const createTask = (overrides: Partial<Task> = {}): Task =>
     ...overrides,
   }) as Task;
 
-const isInOperator = (value: unknown): value is { _type: 'in'; _value: unknown[] } =>
+const createVersion = (
+  course: Course,
+  run: CourseRun,
+  overrides: Partial<CourseVersion> = {},
+): CourseVersion =>
+  ({
+    id: `${run.id}-version-1`,
+    course_id: course.id,
+    course,
+    course_run_id: run.id,
+    courseRun: run,
+    version_number: 1,
+    label: 'Version 1',
+    content: {},
+    change_summary: 'Initial',
+    status: CourseVersionStatus.PUBLISHED,
+    created_at: new Date('2026-01-01T10:00:00.000Z'),
+    created_by: '1',
+    is_active: true,
+    ...overrides,
+  }) as CourseVersion;
+
+const isFindOperator = (
+  value: unknown,
+): value is { _type: string; _value?: unknown } =>
   typeof value === 'object' &&
   value !== null &&
-  (value as { _type?: string })._type === 'in';
+  typeof (value as { _type?: string })._type === 'string';
 
 const matchesWhere = (item: any, where: Record<string, any> = {}) =>
   Object.entries(where).every(([key, expected]) => {
-    if (isInOperator(expected)) {
-      return expected._value.includes(item[key]);
+    if (isFindOperator(expected)) {
+      if (expected._type === 'in') {
+        return Array.isArray(expected._value) && expected._value.includes(item[key]);
+      }
+
+      if (expected._type === 'not') {
+        return item[key] !== expected._value;
+      }
+
+      if (expected._type === 'isNull') {
+        return item[key] === null || item[key] === undefined;
+      }
     }
 
     if (
       expected &&
       typeof expected === 'object' &&
       !Array.isArray(expected) &&
-      !isInOperator(expected)
+      !isFindOperator(expected)
     ) {
       return matchesWhere(item[key] ?? {}, expected);
     }
@@ -161,23 +215,39 @@ const createLearningProcessFixture = () => {
     external_id: 'other-course',
     owner_id: 8,
   });
+  const currentRun = createCourseRun(course, { id: 'course-run-id' });
+  const otherRun = createCourseRun(otherCourse, { id: 'other-course-run-id' });
+  const currentVersion = createVersion(course, currentRun, { id: 'course-version-id' });
+  const otherVersion = createVersion(otherCourse, otherRun, { id: 'other-version-id' });
   const enrollments = [
-    createEnrollment('1', CourseMemberRole.TEACHER),
-    createEnrollment('3', CourseMemberRole.STUDENT),
-    createEnrollment('4', CourseMemberRole.STUDENT),
+    createEnrollment('1', CourseMemberRole.TEACHER, {
+      courseRun: currentRun,
+    }),
+    createEnrollment('3', CourseMemberRole.STUDENT, {
+      courseRun: currentRun,
+    }),
+    createEnrollment('4', CourseMemberRole.STUDENT, {
+      courseRun: currentRun,
+    }),
     createEnrollment('8', CourseMemberRole.TEACHER, {
       courseId: 'other-course-id',
+      courseRunId: otherRun.id,
+      courseRun: otherRun,
       id: 'other-enrollment-8',
     }),
   ];
   const task1 = createTask({
     id: 'task-1',
+    courseVersionId: currentVersion.id,
+    courseVersion: currentVersion,
     title: 'Grundlagen kennenlernen',
     order: 1,
     unlockMode: TaskUnlockMode.IMMEDIATE,
   });
   const task2 = createTask({
     id: 'task-2',
+    courseVersionId: currentVersion.id,
+    courseVersion: currentVersion,
     title: 'Grundlagen anwenden',
     order: 2,
     unlockMode: TaskUnlockMode.AUTOMATIC,
@@ -185,6 +255,8 @@ const createLearningProcessFixture = () => {
   });
   const task3 = createTask({
     id: 'task-3',
+    courseVersionId: currentVersion.id,
+    courseVersion: currentVersion,
     title: 'Abschlussaufgabe bearbeiten',
     order: 3,
     unlockMode: TaskUnlockMode.MANUAL,
@@ -193,14 +265,25 @@ const createLearningProcessFixture = () => {
   const otherTask = createTask({
     id: 'other-task',
     courseId: 'other-course-id',
+    courseRunId: otherRun.id,
+    courseRun: otherRun,
+    courseVersionId: otherVersion.id,
+    courseVersion: otherVersion,
     title: 'Fremde Aufgabe',
   });
   const courseRepository = createRepository<Course>([course, otherCourse], 'course');
+  const courseRunRepository = createRepository<CourseRun>([currentRun, otherRun], 'run');
+  const courseVersionRepository = createRepository<CourseVersion>(
+    [currentVersion, otherVersion],
+    'version',
+  );
   const enrollmentRepository = createRepository<Enrollment>(enrollments, 'enrollment');
   const taskRepository = createRepository<Task>([task1, task2, task3, otherTask], 'task');
   const taskProgressRepository = createRepository<TaskProgress>([], 'progress');
   const service = new CoursesService(
     courseRepository as any,
+    courseRunRepository as any,
+    courseVersionRepository as any,
     createRepository([], 'material') as any,
     createRepository([], 'assignment') as any,
     createRepository([], 'grade') as any,

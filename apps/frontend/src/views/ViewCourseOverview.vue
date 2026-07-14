@@ -55,18 +55,45 @@
           <v-icon start> mdi-account-group </v-icon>
           Mitglieder
         </v-tab>
-        <v-tab value="historie">
+        <v-tab v-if="canViewRunHistory" value="durchlaeufe">
+          <v-icon start> mdi-calendar-range </v-icon>
+          Durchläufe
+        </v-tab>
+        <v-tab v-if="canViewRunHistory" value="versionen">
           <v-icon start> mdi-history </v-icon>
-          Kurs historie
+          Inhaltsversionen
         </v-tab>
       </v-tabs>
 
       <v-divider />
 
+      <v-alert v-if="isViewingHistoricalRun" class="ma-4 mb-0" type="info" variant="tonal">
+        {{ selectedRun?.label }} wird als historischer Durchlauf angezeigt.
+        <v-btn class="ml-2" density="comfortable" variant="text" @click="selectCurrentRun">Aktiven Durchlauf anzeigen</v-btn>
+      </v-alert>
+
       <v-tabs-window v-model="activeTab">
         <!-- Tab 1: Kurs Details -->
         <v-tabs-window-item value="details">
           <v-card-text class="tab-content">
+            <div class="course-meta">
+              <div>
+                <span>Rhythmus</span>
+                <strong>{{ recurrenceLabel }}</strong>
+              </div>
+              <div>
+                <span>{{ canViewRunHistory ? 'Angezeigter Durchlauf' : 'Aktiver Durchlauf' }}</span>
+                <strong>{{ displayedRun?.label ?? 'Noch kein Durchlauf' }}</strong>
+              </div>
+              <div>
+                <span>Status</span>
+                <strong>{{ displayedRun ? runStatusLabel(displayedRun.status) : '-' }}</strong>
+              </div>
+              <div>
+                <span>Aktive Inhaltsversion</span>
+                <strong>{{ displayedContentVersionLabel }}</strong>
+              </div>
+            </div>
             <p class="text-body-1">
               {{ course?.description }}
             </p>
@@ -75,28 +102,32 @@
 
         <v-tabs-window-item value="aufgaben">
           <v-card-text class="tab-content">
-            <LearningProcessPanel :course-id="courseId" :can-manage="canManageContent" />
+            <LearningProcessPanel :course-id="courseId" :can-manage="canManageContent" :course-run-id="selectedRunIdForContent" :course-version-id="selectedCourseVersionIdForContent" :read-only="isViewingHistoricalRun" />
           </v-card-text>
         </v-tabs-window-item>
 
         <v-tabs-window-item value="materialien">
           <v-card-text class="tab-content">
-            <LearningMaterialsPanel :course-id="courseId" :can-manage="canManageContent" />
+            <LearningMaterialsPanel :course-id="courseId" :can-manage="canManageContent" :course-run-id="selectedRunIdForContent" :course-version-id="selectedCourseVersionIdForContent" :read-only="isViewingHistoricalRun" />
           </v-card-text>
         </v-tabs-window-item>
 
         <v-tabs-window-item v-if="canReadResults" value="bewertungen">
           <v-card-text class="tab-content">
-            <CourseResultsPanel :course-id="courseId" :can-manage="canManageResults" />
+            <CourseResultsPanel :course-id="courseId" :can-manage="canManageResults" :course-run-id="selectedRunIdForContent" :read-only="isViewingHistoricalRun" />
           </v-card-text>
         </v-tabs-window-item>
 
         <!-- Tab 3: Mitglieder -->
         <v-tabs-window-item v-if="canManageMembers" value="mitglieder">
-          <v-data-table :headers="memberHeaders" :items="members" item-value="email" :items-per-page="5" density="default">
-            <!-- E-Mail als Link -->
+          <v-data-table :headers="memberHeaders" :items="members" item-value="user.id" :items-per-page="5" density="default">
+            <template #[`item.user.username`]="{ item }">
+              {{ memberDisplayName(item) }}
+            </template>
+
             <template #[`item.user.email`]="{ item }">
-              <a :href="`mailto:${item.user.email}`">{{ item.user.email }}</a>
+              <a v-if="item.user.email" :href="`mailto:${item.user.email}`">{{ item.user.email }}</a>
+              <span v-else class="muted-cell">Keine E-Mail hinterlegt</span>
             </template>
 
             <!-- Rolle als Select -->
@@ -127,27 +158,16 @@
           </v-data-table>
         </v-tabs-window-item>
 
-        <!-- Tab 4: Kurs Historie -->
-        <v-tabs-window-item value="historie">
-          <v-data-table :headers="historieHeaders" :items="courseHistory" item-value="semester" :items-per-page="5" density="default">
-            <!-- Aufgaben als Chip -->
-            <template #[`item.aufgaben`]="{ item }">
-              <v-chip label size="small"> {{ item.aufgaben }} Aufgaben </v-chip>
-            </template>
+        <v-tabs-window-item v-if="canViewRunHistory" value="durchlaeufe">
+          <v-card-text class="tab-content">
+            <CourseRunsPanel :course-id="courseId" :can-manage="canManageCourse" :recurrence-type="course?.recurrenceType" :selected-run-id="selectedRun?.id" @selected="handleRunSelected" @updated="loadCourseContext" />
+          </v-card-text>
+        </v-tabs-window-item>
 
-            <!-- Mitglieder als Chip -->
-            <template #[`item.mitglieder`]="{ item }">
-              <v-chip label size="small"> {{ item.mitglieder }} Mitglieder </v-chip>
-            </template>
-
-            <!-- Footer mit Pagination -->
-            <template #bottom="{ pageCount, page, setPage }">
-              <v-divider />
-              <div class="table-footer table-footer--end">
-                <v-pagination :model-value="page" :length="pageCount" :total-visible="5" density="compact" @update:model-value="setPage($event)" />
-              </div>
-            </template>
-          </v-data-table>
+        <v-tabs-window-item v-if="canViewRunHistory" value="versionen">
+          <v-card-text class="tab-content">
+            <CourseVersionsPanel :course-id="courseId" :can-manage="canManageCourse" :course-run-id="selectedRunIdForContent" :read-only="isViewingHistoricalRun" @active-version="handleActiveVersionSelected" @updated="loadSelectedRunVersion" />
+          </v-card-text>
         </v-tabs-window-item>
       </v-tabs-window>
     </v-card>
@@ -160,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthUserStore } from '@/stores/authUserStore'
 import courseService from '@/services/course.service'
@@ -173,6 +193,9 @@ import CourseRoles from '@/enums/CourseRoles'
 import LearningMaterialsPanel from '@/components/course/LearningMaterialsPanel.vue'
 import LearningProcessPanel from '@/components/course/LearningProcessPanel.vue'
 import CourseResultsPanel from '@/components/course/CourseResultsPanel.vue'
+import CourseRunsPanel from '@/components/course/CourseRunsPanel.vue'
+import CourseVersionsPanel from '@/components/course/CourseVersionsPanel.vue'
+import type { CourseRun, CourseVersion } from '@/services/course.service'
 
 const route = useRoute()
 const router = useRouter()
@@ -183,6 +206,10 @@ const authUserStore = useAuthUserStore()
 const courseId = ref(String(route.params.id))
 const userId = ref<number | null>(authUserStore.auth.user?.id ?? null)
 const course = ref<CoursePL>()
+const currentRun = ref<CourseRun>()
+const selectedRun = ref<CourseRun>()
+const currentVersion = ref<CourseVersion>()
+const selectedRunVersion = ref<CourseVersion>()
 const currentRole = ref('')
 const dialogConfirm = ref<typeof DialogConfirmVue>()
 const dialogCreateCourse = ref<typeof DialogCreateCourse>()
@@ -200,6 +227,31 @@ const canManageCourse = computed(() => permissions.value['course.manage'] === tr
 const canManageMembers = computed(() => permissions.value['course.members.manage'] === true)
 const canReadResults = computed(() => permissions.value['course.results.own.read'] === true || permissions.value['course.results.all.read'] === true)
 const canManageResults = computed(() => permissions.value['course.results.all.read'] === true)
+const canViewRunHistory = computed(() => canManageContent.value || canManageCourse.value)
+const displayedRun = computed(() => (canViewRunHistory.value ? (selectedRun.value ?? currentRun.value) : currentRun.value))
+const selectedRunIdForContent = computed(() => (canViewRunHistory.value ? displayedRun.value?.id : undefined))
+const displayedContentVersion = computed(() => {
+  if (!canViewRunHistory.value) return currentVersion.value
+  if (!displayedRun.value) return undefined
+
+  return displayedRun.value.id === currentRun.value?.id
+    ? currentVersion.value
+    : selectedRunVersion.value
+})
+const selectedCourseVersionIdForContent = computed(() => (canViewRunHistory.value ? displayedContentVersion.value?.id : undefined))
+const isViewingHistoricalRun = computed(() => canViewRunHistory.value && selectedRun.value != null && currentRun.value != null && selectedRun.value.id !== currentRun.value.id)
+const displayedContentVersionLabel = computed(() => {
+  const version = displayedContentVersion.value
+
+  if (!version) return 'Noch keine Inhaltsversion'
+
+  return version.label || `Version ${version.versionNumber}`
+})
+const recurrenceLabel = computed(() => {
+  if (course.value?.recurrenceType === 'SEMESTER') return 'Semesterweise'
+  if (course.value?.recurrenceType === 'YEARLY') return 'Jährlich'
+  return 'Dauerhaft'
+})
 
 const breadcrumbItems = computed(() => [
   { title: 'Dashboard', disabled: false, href: '/#/home' },
@@ -228,6 +280,12 @@ const loadCourseContext = () => {
     .getCourseContext(courseId.value)
     .then((context) => {
       course.value = context.course
+      currentRun.value = context.currentRun
+      currentVersion.value = context.currentVersion
+      if (!selectedRun.value || selectedRun.value.id === currentRun.value?.id || !canViewRunHistory.value) {
+        selectedRun.value = context.currentRun
+        selectedRunVersion.value = context.currentVersion
+      }
       currentRole.value = context.role
       permissions.value = context.permissions
 
@@ -239,6 +297,8 @@ const loadCourseContext = () => {
       if (canManageMembers.value) {
         loadMembers()
       }
+
+      loadSelectedRunVersion()
     })
     .catch((error) => {
       const apiError = normalizeApiError(error)
@@ -272,13 +332,31 @@ const loadCourseContext = () => {
 
 const activeTab = ref('details')
 
+watch(canViewRunHistory, (allowed) => {
+  if (!allowed && (activeTab.value === 'durchlaeufe' || activeTab.value === 'versionen')) {
+    activeTab.value = 'details'
+  }
+})
+
+watch(selectedRunIdForContent, () => {
+  loadSelectedRunVersion()
+  if (canManageMembers.value) {
+    loadMembers()
+  }
+})
+
+const runStatusLabel = (status?: CourseRun['status']) => {
+  if (status === 'PUBLISHED') return 'Veröffentlicht'
+  if (status === 'ARCHIVED') return 'Archiviert'
+  return 'Entwurf'
+}
+
 // ── Mitglieder-Tab ────────────────────────────────────────────────────────────
 
 const roleOptions = ['STUDENT', 'TUTOR', 'TEACHER']
 
 const memberHeaders = [
-  { title: 'Name', align: 'start' as const, key: 'user.lastName' },
-  { title: 'Vorname', align: 'start' as const, key: 'user.firstName' },
+  { title: 'Nutzer', align: 'start' as const, key: 'user.username' },
   { title: 'E-Mail', align: 'start' as const, key: 'user.email' },
   { title: 'Rolle', align: 'start' as const, key: 'role', width: '160px' },
   { title: 'Aktion', align: 'center' as const, key: 'actions', sortable: false, width: '80px' }
@@ -288,16 +366,67 @@ const members = ref<Member[]>([])
 
 const loadMembers = () => {
   courseService
-    .getCourseMembers(courseId.value)
+    .getCourseMembers(courseId.value, selectedRunIdForContent.value)
     .then((response) => {
       members.value = response.data
     })
     .catch((error) => showSnackbarError(getApiErrorMessage(error)))
 }
 
+const handleRunSelected = (run: CourseRun) => {
+  selectedRun.value = run
+}
+
+const handleActiveVersionSelected = (version: CourseVersion) => {
+  if (version.courseRunId && version.courseRunId === currentRun.value?.id) {
+    currentVersion.value = version
+  }
+
+  if (!version.courseRunId || version.courseRunId === selectedRunIdForContent.value) {
+    selectedRunVersion.value = version
+  }
+}
+
+const loadSelectedRunVersion = () => {
+  if (!canViewRunHistory.value) {
+    selectedRunVersion.value = currentVersion.value
+    return
+  }
+
+  const runId = selectedRunIdForContent.value
+
+  if (!runId) {
+    selectedRunVersion.value = undefined
+    return
+  }
+
+  if (runId === currentRun.value?.id) {
+    selectedRunVersion.value = currentVersion.value
+    return
+  }
+
+  courseService
+    .listCourseVersions(courseId.value, runId)
+    .then((versions) => {
+      selectedRunVersion.value = versions.find((version) => version.isActive) ?? versions[0]
+    })
+    .catch((error) => showSnackbarError(getApiErrorMessage(error)))
+}
+
+const selectCurrentRun = () => {
+  selectedRun.value = currentRun.value
+  selectedRunVersion.value = currentVersion.value
+}
+
+const memberDisplayName = (member: Member) => {
+  const fullName = [member.user.firstName, member.user.lastName].filter(Boolean).join(' ').trim()
+
+  return fullName || member.user.username || `User ${member.user.id}`
+}
+
 const kickUser = (member: Member) => {
   if (dialogConfirm.value) {
-    dialogConfirm.value.openDialog(`Entferne Nutzer: ${member.user.firstName} ${member.user.lastName}`, 'Wollen Sie den Nutzer wirklich aus dem Kurs entfernen?', 'Entfernen').then((result: boolean) => {
+    dialogConfirm.value.openDialog(`Entferne Nutzer: ${memberDisplayName(member)}`, 'Wollen Sie den Nutzer wirklich aus dem Kurs entfernen?', 'Entfernen').then((result: boolean) => {
       if (result) {
         courseService
           .leaveCourse(courseId.value, member.user.id)
@@ -355,31 +484,6 @@ const editCourse = () => {
   }
 }
 
-// ── Kurs-Historie-Tab (wird später vom Backend befüllt) ───────────────────────
-
-interface CourseHistoryEntry {
-  semester: string
-  rolle: string
-  aufgaben: number
-  mitglieder: number
-}
-
-const historieHeaders = [
-  { title: 'Semester', align: 'start' as const, key: 'semester' },
-  { title: 'Rolle', align: 'start' as const, key: 'rolle' },
-  { title: 'Aufgaben', align: 'start' as const, key: 'aufgaben' },
-  { title: 'Mitglieder', align: 'start' as const, key: 'mitglieder' }
-]
-
-const courseHistory = ref<CourseHistoryEntry[]>([
-  { semester: 'Sommersemester 26', rolle: 'TEACHER', aufgaben: 3, mitglieder: 25 },
-  { semester: 'Wintersemester 25/26', rolle: 'TUTOR', aufgaben: 8, mitglieder: 22 },
-  { semester: 'Sommersemester 25', rolle: 'STUDENT', aufgaben: 6, mitglieder: 30 },
-  { semester: 'Wintersemester 24/25', rolle: 'STUDENT', aufgaben: 5, mitglieder: 18 },
-  { semester: 'Sommersemester 24', rolle: 'TUTOR', aufgaben: 4, mitglieder: 27 },
-  { semester: 'Wintersemester 23/24', rolle: 'TEACHER', aufgaben: 10, mitglieder: 35 },
-  { semester: 'Sommersemester 23', rolle: 'TUTOR', aufgaben: 7, mitglieder: 20 }
-])
 </script>
 
 <style scoped lang="scss">
@@ -423,6 +527,30 @@ const courseHistory = ref<CourseHistoryEntry[]>([
   min-height: 320px;
 }
 
+.course-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+
+  div {
+    border-bottom: 1px solid rgb(var(--v-theme-outline-variant));
+    padding-block: 8px;
+  }
+
+  span {
+    display: block;
+    color: rgb(var(--v-theme-on-surface-variant));
+    font-size: 0.8rem;
+  }
+
+  strong {
+    display: block;
+    margin-top: 4px;
+    font-weight: 500;
+  }
+}
+
 .table-footer {
   display: flex;
   align-items: center;
@@ -436,5 +564,9 @@ const courseHistory = ref<CourseHistoryEntry[]>([
 
 .role-select {
   width: 110px;
+}
+
+.muted-cell {
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 </style>

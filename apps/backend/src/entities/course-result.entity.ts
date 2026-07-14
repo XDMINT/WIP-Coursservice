@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 
 import { Course } from './course.entity';
+import { CourseRun } from './course-run.entity';
 import { Enrollment } from './enrollment.entity';
 
 export enum CourseResultMode {
@@ -46,6 +47,16 @@ export class CourseResult {
   })
   @JoinColumn({ name: 'courseId' })
   course: Course;
+
+  @Column({ type: 'uuid', nullable: true })
+  courseRunId?: string;
+
+  @ManyToOne(() => CourseRun, (run) => run.results, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'courseRunId' })
+  courseRun?: CourseRun;
 
   @Column({ type: 'uuid' })
   enrollmentId: string;

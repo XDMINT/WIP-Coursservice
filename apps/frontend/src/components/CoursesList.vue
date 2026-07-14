@@ -4,30 +4,67 @@
       {{ errorMessage }}
     </v-alert>
     <v-progress-linear v-if="loading" class="mb-4" color="primary" indeterminate />
+
     <v-text-field v-model="search" label="Search" density="compact" prepend-icon="mdi-magnify" variant="underlined" hide-details class="search-bar" />
-    <v-row>
-      <v-checkbox v-model="checkboxActive" label="Nur aktive Kurse anzeigen" @change="filterCourseList" />
-      <v-checkbox v-model="checkboxFriedberg" label="Friedberg" @change="filterCourseList" @click="checkboxGießen = false" />
-      <v-checkbox v-model="checkboxGießen" label="Gießen" @change="filterCourseList" @click="checkboxFriedberg = false" />
-      <v-checkbox v-model="checkboxParticipation" label="Teilnahme" @change="filterCourseList" />
+
+    <v-row class="filters">
+      <v-checkbox v-model="checkboxActive" label="Nur aktive Kurse anzeigen" />
+      <v-checkbox v-model="checkboxFriedberg" label="Friedberg" @click="checkboxGießen = false" />
+      <v-checkbox v-model="checkboxGießen" label="Gießen" @click="checkboxFriedberg = false" />
     </v-row>
-    <v-data-table :headers="headers" :items="displayedCourses" :sort-by="sortBy" item-value="name" class="elevation-1" :search="search" density="default" height="480px" @click:row="openCourseOrSignUp">
-      <template #[`item.course.active`]="{ item }">
-        <v-icon v-if="!ifActiveSemester(item.course.semester as Semester)" icon="mdi-close-circle" color="status-locked" />
-        <v-icon v-if="ifActiveSemester(item.course.semester as Semester)" icon="mdi-check-circle" color="success" />
-      </template>
-      <template #[`item.member`]="{ item }">
-        <v-icon v-if="item.member == true" icon="mdi-check-bold" color="success" />
-      </template>
-      <template #no-data>
-        <v-empty-state icon="mdi-school-outline" title="Keine Kurse vorhanden" text="Für die aktuelle Auswahl wurden keine Kurse gefunden." />
-      </template>
-    </v-data-table>
+
+    <section class="course-section">
+      <div class="section-heading">
+        <h2>Meine Kurse</h2>
+        <v-chip label size="small">{{ displayedMyCourses.length }}</v-chip>
+      </div>
+
+      <v-data-table :headers="myCourseHeaders" :items="displayedMyCourses" :sort-by="sortBy" item-value="course.id" class="elevation-1" :search="search" density="default" height="320px" @click:row="openCourse">
+        <template #[`item.course.active`]="{ item }">
+          <v-icon v-if="!ifActiveSemester(item.course.semester as Semester)" icon="mdi-close-circle" color="status-locked" />
+          <v-icon v-else icon="mdi-check-circle" color="success" />
+        </template>
+
+        <template #[`item.membershipRole`]="{ item }">
+          {{ roleLabel(item.membershipRole) }}
+        </template>
+
+        <template #[`item.actions`]="{ item }">
+          <v-btn icon="mdi-open-in-new" size="small" variant="text" @click.stop="openCourseFromItem(item)" />
+        </template>
+
+        <template #no-data>
+          <v-empty-state icon="mdi-school-outline" title="Keine eigenen Kurse vorhanden" text="Für die aktuelle Auswahl wurden keine Kurse gefunden." />
+        </template>
+      </v-data-table>
+    </section>
+
+    <section class="course-section">
+      <div class="section-heading">
+        <h2>Verfügbare Kurse</h2>
+        <v-chip label size="small">{{ displayedAvailableCourses.length }}</v-chip>
+      </div>
+
+      <v-data-table :headers="availableCourseHeaders" :items="displayedAvailableCourses" :sort-by="sortBy" item-value="course.id" class="elevation-1" :search="search" density="default" height="320px" @click:row="openSignup">
+        <template #[`item.course.active`]="{ item }">
+          <v-icon v-if="!ifActiveSemester(item.course.semester as Semester)" icon="mdi-close-circle" color="status-locked" />
+          <v-icon v-else icon="mdi-check-circle" color="success" />
+        </template>
+
+        <template #[`item.actions`]="{ item }">
+          <v-btn color="primary" size="small" variant="flat" prepend-icon="mdi-account-plus" :loading="enrollingCourseId === String(item.course.id)" @click.stop="enrollAvailableCourse(item)"> Einschreiben </v-btn>
+        </template>
+
+        <template #no-data>
+          <v-empty-state icon="mdi-school-search" title="Keine verfügbaren Kurse" text="Für die aktuelle Auswahl gibt es keine freigegebenen Kurse zur Einschreibung." />
+        </template>
+      </v-data-table>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthUserStore } from '../stores/authUserStore'
 import type CourseAndParticipationPL from '@/model/course/CourseAndParticipationPL'
@@ -39,6 +76,7 @@ type DataTableHeader = {
   title: string
   align?: 'start' | 'center' | 'end'
   key: string
+  sortable?: boolean
 }
 
 type DataTableSortItem = {
@@ -52,69 +90,117 @@ const authUserStore = useAuthUserStore()
 const search = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
+const enrollingCourseId = ref('')
 
-const headers = ref<DataTableHeader[]>([
+const myCourseHeaders = ref<DataTableHeader[]>([
   { title: 'Semester', align: 'start', key: 'course.semester.name' },
-  { title: 'Aktiv', align: 'start', key: 'course.active' },
+  { title: 'Semester aktiv', align: 'start', key: 'course.active' },
   { title: 'Kursname', align: 'start', key: 'course.name' },
+  { title: 'Kurzbeschreibung', align: 'start', key: 'course.description' },
+  { title: 'Status', align: 'start', key: 'course.status' },
   { title: 'Standort', align: 'start', key: 'course.location' },
-  { title: 'Teilnahme', align: 'start', key: 'member' }
+  { title: 'Owner', align: 'start', key: 'course.owner' },
+  { title: 'Rolle', align: 'start', key: 'membershipRole' },
+  { title: '', align: 'end', key: 'actions', sortable: false }
 ])
 
-// sort by semester.name and standort
+const availableCourseHeaders = ref<DataTableHeader[]>([
+  { title: 'Semester', align: 'start', key: 'course.semester.name' },
+  { title: 'Semester aktiv', align: 'start', key: 'course.active' },
+  { title: 'Kursname', align: 'start', key: 'course.name' },
+  { title: 'Kurzbeschreibung', align: 'start', key: 'course.description' },
+  { title: 'Status', align: 'start', key: 'course.status' },
+  { title: 'Standort', align: 'start', key: 'course.location' },
+  { title: 'Owner', align: 'start', key: 'course.owner' },
+  { title: '', align: 'end', key: 'actions', sortable: false }
+])
+
 const sortBy = ref<DataTableSortItem[]>([{ key: 'course.name', order: 'asc' }])
 
-// Courses lists
-const displayedCourses = ref<CourseAndParticipationPL[]>([])
-const allCourses = ref<CourseAndParticipationPL[]>([])
+const myCourses = ref<CourseAndParticipationPL[]>([])
+const availableCourses = ref<CourseAndParticipationPL[]>([])
 
-// Checkboxes
 const checkboxActive = ref(true)
 const checkboxFriedberg = ref(false)
 const checkboxGießen = ref(false)
-const checkboxParticipation = ref(false)
+
+const displayedMyCourses = computed(() => filterCourses(myCourses.value))
+const displayedAvailableCourses = computed(() => filterCourses(availableCourses.value))
 
 const loadCourses = () => {
   const userId = authUserStore.auth.user?.id
-  if (userId != undefined) {
-    loading.value = true
-    errorMessage.value = ''
-    courseService
-      .getAllCourses(userId)
-      .then((data) => {
-        allCourses.value = data
-        displayedCourses.value = allCourses.value
-
-        filterCourseList()
-      })
-      .catch((error) => {
-        errorMessage.value = getApiErrorMessage(error)
-      })
-      .finally(() => {
-        loading.value = false
-      })
-  } else {
+  if (userId == null) {
     errorMessage.value = 'Sie müssen angemeldet sein, um Kurse zu laden.'
+    return
   }
+
+  loading.value = true
+  errorMessage.value = ''
+
+  Promise.all([courseService.getEnrolledCourses(), courseService.getAvailableCourses()])
+    .then(([enrolledCourses, enrollableCourses]) => {
+      myCourses.value = enrolledCourses
+      availableCourses.value = enrollableCourses
+    })
+    .catch((error) => {
+      errorMessage.value = getApiErrorMessage(error)
+    })
+    .finally(() => {
+      loading.value = false
+    })
 }
 
-const filterCourseList = () => {
-  let filteredList: CourseAndParticipationPL[] = allCourses.value
+const filterCourses = (courses: CourseAndParticipationPL[]) => {
+  let filteredList = courses
   if (checkboxActive.value) filteredList = filteredList.filter((item) => ifActiveSemester(item.course.semester as Semester))
   if (checkboxFriedberg.value) filteredList = filteredList.filter((item) => item.course.location == 'Friedberg')
   if (checkboxGießen.value) filteredList = filteredList.filter((item) => item.course.location == 'Gießen')
-  if (checkboxParticipation.value) filteredList = filteredList.filter((item) => item.member == true)
-  displayedCourses.value = filteredList
+  return filteredList
 }
 
-const openCourseOrSignUp = (row: any, item: any) => {
-  if (item.item.member == false) router.push('/course/' + item.item.course.id + '/signup')
-  else router.push('/course/' + item.item.course.id)
+const openCourse = (_row: unknown, item: { item: CourseAndParticipationPL }) => {
+  openCourseFromItem(item.item)
+}
+
+const openSignup = (_row: unknown, item: { item: CourseAndParticipationPL }) => {
+  router.push('/course/' + item.item.course.id + '/signup')
+}
+
+const openCourseFromItem = (item: CourseAndParticipationPL) => {
+  router.push('/course/' + item.course.id)
+}
+
+const enrollAvailableCourse = (item: CourseAndParticipationPL) => {
+  if (item.course.requiresEnrollmentKey) {
+    router.push('/course/' + item.course.id + '/signup')
+    return
+  }
+
+  enrollingCourseId.value = String(item.course.id)
+  errorMessage.value = ''
+
+  courseService
+    .enrollCourse(item.course.id)
+    .then(() => {
+      router.push('/course/' + item.course.id)
+    })
+    .catch((error) => {
+      errorMessage.value = getApiErrorMessage(error)
+    })
+    .finally(() => {
+      enrollingCourseId.value = ''
+    })
+}
+
+const roleLabel = (role?: string) => {
+  if (role === 'TEACHER') return 'Lehrend'
+  if (role === 'TUTOR') return 'Tutor'
+  if (role === 'STUDENT') return 'Studierend'
+  return 'Mitglied'
 }
 
 const ifActiveSemester = (semester: Semester) => {
-  if (Date.now() > Date.parse(semester.startDate) && Date.now() < Date.parse(semester.endDate)) return true
-  else return false
+  return Date.now() > Date.parse(semester.startDate) && Date.now() < Date.parse(semester.endDate)
 }
 
 defineExpose({
@@ -125,10 +211,31 @@ defineExpose({
 <style scoped lang="scss">
 .container {
   width: auto;
-  margin: 20px 20px;
+  margin: 20px;
 }
 
 .search-bar {
   margin-bottom: 20px;
+}
+
+.filters {
+  margin-bottom: 8px;
+}
+
+.course-section {
+  margin-top: 24px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+
+  h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 500;
+  }
 }
 </style>

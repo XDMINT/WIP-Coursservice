@@ -26,6 +26,15 @@
     />
 
     <template v-else-if="canManage">
+      <v-alert
+        v-if="readOnly"
+        class="mb-4"
+        type="info"
+        variant="tonal"
+      >
+        Historischer Kursdurchlauf: Bewertungen werden schreibgeschützt angezeigt.
+      </v-alert>
+
       <section class="results-section">
         <div class="section-toolbar">
           <div>
@@ -43,6 +52,7 @@
               Aktualisieren
             </v-btn>
             <v-btn
+              v-if="canEdit"
               color="primary"
               variant="outlined"
               :loading="saving"
@@ -129,6 +139,7 @@
           <template #[`item.actions`]="{ item }">
             <div class="table-actions">
               <v-btn
+                v-if="canEdit"
                 size="small"
                 variant="text"
                 @click="openManualDialog(item)"
@@ -139,6 +150,7 @@
                 Bewerten
               </v-btn>
               <v-btn
+                v-if="canEdit"
                 size="small"
                 variant="text"
                 @click="recalculateResult(item)"
@@ -348,6 +360,8 @@ import { getApiErrorMessage } from '@/services/apiErrors'
 const props = defineProps<{
   courseId: string | number
   canManage: boolean
+  courseRunId?: string
+  readOnly?: boolean
 }>()
 
 const loading = ref(false)
@@ -409,6 +423,9 @@ const manualPassStatusOptions = [
 
 const teacherResults = computed(() => resultList.value.items)
 const pageCount = computed(() => Math.max(1, Math.ceil(resultList.value.total / resultList.value.pageSize)))
+const canEdit = computed(() => props.canManage && props.readOnly !== true)
+const readOnly = computed(() => props.canManage && props.readOnly === true)
+const effectiveCourseRunId = computed(() => (props.canManage ? props.courseRunId : undefined))
 const studentSummary = computed(() => {
   if (!myResult.value || myResult.value.passStatus === CoursePassStatus.NOT_ASSESSED) {
     return 'Noch nicht bewertet.'
@@ -448,7 +465,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.courseId, props.canManage],
+  () => [props.courseId, effectiveCourseRunId.value, props.canManage, props.readOnly],
   () => loadData()
 )
 
@@ -491,7 +508,7 @@ const loadTeacherResults = () =>
       pageSize: pageSize.value,
       passStatus: passStatusFilter.value,
       source: sourceFilter.value
-    })
+    }, effectiveCourseRunId.value)
   })
 
 const updateResultInList = (updatedResult: CourseResult) => {
@@ -516,6 +533,8 @@ const fillManualForm = (result: CourseResult) => {
 }
 
 const openManualDialog = (result: CourseResult) => {
+  if (!canEdit.value) return
+
   if (result.source === CourseResultSource.AUTOMATIC_CALCULATION) {
     pendingOverrideResult.value = result
     overwriteDialogOpen.value = true
@@ -536,6 +555,11 @@ const confirmManualOverride = () => {
 }
 
 const saveManualResult = async () => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Bewertungen historischer Durchläufe können nicht bearbeitet werden.'
+    return
+  }
+
   if (!editingResult.value || manualValidationMessage.value) return
 
   saving.value = true
@@ -560,6 +584,11 @@ const saveManualResult = async () => {
 }
 
 const recalculateResult = async (result: CourseResult) => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Bewertungen historischer Durchläufe können nicht neu berechnet werden.'
+    return
+  }
+
   saving.value = true
   errorMessage.value = ''
 
@@ -575,6 +604,11 @@ const recalculateResult = async (result: CourseResult) => {
 }
 
 const recalculateAllResults = async () => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Bewertungen historischer Durchläufe können nicht neu berechnet werden.'
+    return
+  }
+
   saving.value = true
   errorMessage.value = ''
 

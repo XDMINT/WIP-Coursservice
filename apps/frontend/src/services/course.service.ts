@@ -12,6 +12,8 @@ type BackendCourse = {
   description?: string
   semester?: string
   status?: string
+  recurrenceType?: CourseRecurrenceType
+  recurrence_type?: CourseRecurrenceType
   created_at?: string
   createdAt?: string
   owner_id?: number
@@ -20,6 +22,7 @@ type BackendCourse = {
   keyPassword?: string
   requiresEnrollmentKey?: boolean
   location?: string
+  currentRun?: BackendCourseRun
 }
 
 type BackendEnrollment = {
@@ -29,22 +32,189 @@ type BackendEnrollment = {
   role: string
 }
 
+type BackendCourseCatalogItem = BackendCourse & {
+  enrolled?: boolean
+  membershipRole?: string
+  canEnroll?: boolean
+  currentRun?: BackendCourseRun
+}
+
+export type CourseRecurrenceType = 'SEMESTER' | 'YEARLY' | 'CONTINUOUS'
+export type CourseRunStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+export type CourseRunTemplateStrategy = 'ACTIVE_VERSION_OF_CURRENT_RUN' | 'SPECIFIC_VERSION' | 'EMPTY'
+
+type BackendCourseRun = {
+  id: string
+  courseId?: string
+  course_id?: string
+  label: string
+  startDate?: string
+  start_date?: string
+  endDate?: string
+  end_date?: string
+  status: CourseRunStatus
+  sourceRunId?: string | null
+  source_run_id?: string | null
+  isActive?: boolean
+  is_active?: boolean
+  createdBy?: string
+  created_by?: string
+  createdAt?: string
+  created_at?: string
+  updatedAt?: string
+  updated_at?: string
+  enrollmentCount?: number
+  materialCount?: number
+  taskCount?: number
+  versionCount?: number
+  resultCount?: number
+  progressCount?: number
+  assignmentCount?: number
+}
+
+type BackendCourseRunDeletion = {
+  action: 'DELETED' | 'ARCHIVED'
+  reason?: string
+  run?: BackendCourseRun
+}
+
+type BackendCourseRunPlan = {
+  recurrenceType?: CourseRecurrenceType
+  recurrence_type?: CourseRecurrenceType
+  currentRun: BackendCourseRun
+  current_run?: BackendCourseRun
+  nextRun?: Partial<BackendCourseRun> | null
+  next_run?: Partial<BackendCourseRun> | null
+  templateStrategy?: CourseRunTemplateStrategy
+  template_strategy?: CourseRunTemplateStrategy
+  templateVersion?: BackendCourseVersion | null
+  template_version?: BackendCourseVersion | null
+  regularPlanningAvailable?: boolean
+  regular_planning_available?: boolean
+}
+
+type BackendCourseVersion = {
+  id: string
+  courseId?: string
+  course_id?: string
+  courseRunId?: string
+  course_run_id?: string
+  courseRunLabel?: string
+  course_run_label?: string
+  versionNumber?: number
+  version_number?: number
+  label?: string | null
+  content?: Record<string, unknown>
+  changeSummary?: string
+  change_summary?: string
+  status?: 'PUBLISHED' | 'ARCHIVED'
+  sourceVersionId?: string | null
+  source_version_id?: string | null
+  sourceVersionNumber?: number
+  source_version_number?: number
+  sourceVersionLabel?: string | null
+  source_version_label?: string | null
+  sourceRunLabel?: string
+  source_run_label?: string
+  createdAt?: string
+  created_at?: string
+  createdBy?: string
+  created_by?: string
+  isActive?: boolean
+  is_active?: boolean
+}
+
 export type CoursePermissionKey = 'course.content.read' | 'course.content.manage' | 'course.manage' | 'course.members.manage' | 'course.results.own.read' | 'course.results.all.read'
 
 export type CourseContext = {
   course: CoursePL
   role: CourseRoles
   permissions: Record<CoursePermissionKey, boolean>
+  currentRun?: CourseRun
+  currentVersion?: CourseVersion
+}
+
+export type CourseRun = {
+  id: string
+  courseId: string
+  label: string
+  startDate?: string
+  endDate?: string
+  status: CourseRunStatus
+  sourceRunId?: string | null
+  isActive: boolean
+  createdBy?: string
+  createdAt?: string
+  updatedAt?: string
+  enrollmentCount?: number
+  materialCount?: number
+  taskCount?: number
+  versionCount?: number
+  resultCount?: number
+  progressCount?: number
+  assignmentCount?: number
+}
+
+export type CreateCourseRunPayload = {
+  label?: string
+  startDate?: string
+  endDate?: string
+  status?: CourseRunStatus
+  activate?: boolean
+  sourceVersionId?: string
+}
+
+export type UpdateCourseRunPlanTemplatePayload = {
+  strategy: CourseRunTemplateStrategy
+  sourceVersionId?: string | null
+}
+
+export type CourseRunDeletion = {
+  action: 'DELETED' | 'ARCHIVED'
+  reason?: string
+  run?: CourseRun
+}
+
+export type CourseVersion = {
+  id: string
+  courseId: string
+  courseRunId?: string
+  courseRunLabel?: string
+  versionNumber: number
+  label?: string | null
+  content: Record<string, unknown>
+  changeSummary: string
+  status: 'PUBLISHED' | 'ARCHIVED'
+  sourceVersionId?: string | null
+  sourceVersionNumber?: number
+  sourceVersionLabel?: string | null
+  sourceRunLabel?: string
+  createdAt: string
+  createdBy: string
+  isActive: boolean
+}
+
+export type CourseRunPlan = {
+  recurrenceType: CourseRecurrenceType
+  currentRun: CourseRun
+  nextRun?: Pick<CourseRun, 'label' | 'startDate' | 'endDate'> | null
+  templateStrategy: CourseRunTemplateStrategy
+  templateVersion?: CourseVersion | null
+  regularPlanningAvailable: boolean
 }
 
 type BackendCourseContext = {
   course: BackendCourse
+  currentRun?: BackendCourseRun
+  currentVersion?: BackendCourseVersion
   membership: {
     userId: string
     role: string
   }
   permissions: Record<CoursePermissionKey, boolean>
 }
+
+type MaybeListResponse<T> = T[] | { data?: T[] }
 
 export const normalizeCourseRole = (role?: string | null): CourseRoles => {
   if (role === 'OWNER') return CourseRoles.TEACHER
@@ -59,6 +229,8 @@ const mapCourseFromBackend = (course: BackendCourse): CoursePL => ({
   name: course.title,
   description: course.description ?? '',
   active: course.status !== 'ARCHIVED',
+  status: course.status,
+  recurrenceType: course.recurrenceType ?? course.recurrence_type ?? 'CONTINUOUS',
   creationDate: course.created_at ?? course.createdAt ?? '',
   semester: {
     id: 0,
@@ -69,7 +241,8 @@ const mapCourseFromBackend = (course: BackendCourse): CoursePL => ({
   owner: course.owner_id ?? course.ownerId ?? 0,
   keyPassword: course.key_password ?? course.keyPassword ?? '',
   requiresEnrollmentKey: course.requiresEnrollmentKey ?? Boolean(course.key_password ?? course.keyPassword),
-  location: course.location ?? ''
+  location: course.location ?? '',
+  ...(course.currentRun ? { currentRun: mapCourseRunFromBackend(course.currentRun) } : {})
 })
 
 const mapCourseToBackend = (course: CoursePL) => ({
@@ -77,9 +250,23 @@ const mapCourseToBackend = (course: CoursePL) => ({
   description: course.description,
   semester: course.semester?.name,
   status: course.active === false ? 'DRAFT' : 'PUBLISHED',
+  recurrenceType: course.recurrenceType ?? 'CONTINUOUS',
+  initialRunLabel: course.initialRunLabel,
+  initialRunStartDate: course.initialRunStartDate,
+  initialRunEndDate: course.initialRunEndDate,
   ownerId: course.owner,
   keyPassword: course.keyPassword,
   location: course.location
+})
+
+const mapCourseCatalogItemFromBackend = (item: BackendCourseCatalogItem): CourseAndParticipationPL => ({
+  course: mapCourseFromBackend({
+    ...item,
+    currentRun: item.currentRun
+  }),
+  member: item.enrolled === true,
+  canEnroll: item.canEnroll === true,
+  membershipRole: item.membershipRole
 })
 
 const mapEnrollmentToMember = (enrollment: BackendEnrollment): Member => {
@@ -99,6 +286,92 @@ const mapEnrollmentToMember = (enrollment: BackendEnrollment): Member => {
   }
 }
 
+const mapCourseVersionFromBackend = (version: BackendCourseVersion): CourseVersion => ({
+  id: version.id,
+  courseId: version.courseId ?? version.course_id ?? '',
+  ...((version.courseRunId ?? version.course_run_id)
+    ? { courseRunId: version.courseRunId ?? version.course_run_id }
+    : {}),
+  courseRunLabel: version.courseRunLabel ?? version.course_run_label,
+  versionNumber: version.versionNumber ?? version.version_number ?? 0,
+  label: version.label,
+  content: version.content ?? {},
+  changeSummary: version.changeSummary ?? version.change_summary ?? '',
+  status: version.status ?? 'PUBLISHED',
+  sourceVersionId: version.sourceVersionId ?? version.source_version_id,
+  sourceVersionNumber: version.sourceVersionNumber ?? version.source_version_number,
+  sourceVersionLabel: version.sourceVersionLabel ?? version.source_version_label,
+  sourceRunLabel: version.sourceRunLabel ?? version.source_run_label,
+  createdAt: version.createdAt ?? version.created_at ?? '',
+  createdBy: version.createdBy ?? version.created_by ?? '',
+  isActive: version.isActive ?? version.is_active ?? false
+})
+
+const mapCourseRunFromBackend = (run: BackendCourseRun): CourseRun => ({
+  id: run.id,
+  courseId: run.courseId ?? run.course_id ?? '',
+  label: run.label,
+  startDate: run.startDate ?? run.start_date,
+  endDate: run.endDate ?? run.end_date,
+  status: run.status,
+  sourceRunId: run.sourceRunId ?? run.source_run_id,
+  isActive: run.isActive ?? run.is_active ?? false,
+  createdBy: run.createdBy ?? run.created_by,
+  createdAt: run.createdAt ?? run.created_at,
+  updatedAt: run.updatedAt ?? run.updated_at,
+  enrollmentCount: run.enrollmentCount,
+  materialCount: run.materialCount,
+  taskCount: run.taskCount,
+  versionCount: run.versionCount,
+  resultCount: run.resultCount,
+  progressCount: run.progressCount,
+  assignmentCount: run.assignmentCount
+})
+
+const mapCourseRunDeletionFromBackend = (result: BackendCourseRunDeletion): CourseRunDeletion => ({
+  action: result.action,
+  reason: result.reason,
+  run: result.run ? mapCourseRunFromBackend(result.run) : undefined
+})
+
+const mapCourseRunPlanFromBackend = (plan: BackendCourseRunPlan): CourseRunPlan => {
+  const nextRun = plan.nextRun ?? plan.next_run ?? null
+  const templateVersion = plan.templateVersion ?? plan.template_version ?? null
+
+  return {
+    recurrenceType: plan.recurrenceType ?? plan.recurrence_type ?? 'CONTINUOUS',
+    currentRun: mapCourseRunFromBackend(plan.currentRun ?? plan.current_run ?? {
+      id: '',
+      courseId: '',
+      label: '',
+      status: 'DRAFT',
+      isActive: false
+    }),
+    nextRun: nextRun
+      ? {
+          label: nextRun.label ?? '',
+          startDate: nextRun.startDate ?? nextRun.start_date,
+          endDate: nextRun.endDate ?? nextRun.end_date
+        }
+      : null,
+    templateStrategy: plan.templateStrategy ?? plan.template_strategy ?? 'ACTIVE_VERSION_OF_CURRENT_RUN',
+    templateVersion: templateVersion ? mapCourseVersionFromBackend(templateVersion) : null,
+    regularPlanningAvailable: plan.regularPlanningAvailable ?? plan.regular_planning_available ?? false
+  }
+}
+
+const readListResponse = <T>(payload: MaybeListResponse<T>, endpointLabel: string): T[] => {
+  if (Array.isArray(payload)) {
+    return payload
+  }
+
+  if (payload && typeof payload === 'object' && Array.isArray(payload.data)) {
+    return payload.data
+  }
+
+  throw new Error(`${endpointLabel} lieferte keine Liste.`)
+}
+
 class CourseService {
   async getCourse(id: CourseId): Promise<{ data: CoursePL }> {
     const response = await apiClient.get<BackendCourse>(`/courses/${id}`)
@@ -114,19 +387,28 @@ class CourseService {
     return {
       course: mapCourseFromBackend(response.data.course),
       role: normalizeCourseRole(response.data.membership.role),
-      permissions: response.data.permissions
+      permissions: response.data.permissions,
+      ...(response.data.currentRun ? { currentRun: mapCourseRunFromBackend(response.data.currentRun) } : {}),
+      ...(response.data.currentVersion ? { currentVersion: mapCourseVersionFromBackend(response.data.currentVersion) } : {})
     }
   }
 
-  async getAllCourses(userId: number): Promise<CourseAndParticipationPL[]> {
-    const response = await apiClient.get<BackendCourse[]>('/courses', {
-      params: { userId }
-    })
+  async getAllCourses(): Promise<CourseAndParticipationPL[]> {
+    const [enrolledCourses, availableCourses] = await Promise.all([this.getEnrolledCourses(), this.getAvailableCourses()])
 
-    return response.data.map((course) => ({
-      course: mapCourseFromBackend(course),
-      member: true
-    }))
+    return [...enrolledCourses, ...availableCourses]
+  }
+
+  async getEnrolledCourses(): Promise<CourseAndParticipationPL[]> {
+    const response = await apiClient.get<MaybeListResponse<BackendCourseCatalogItem>>('/courses/enrolled')
+
+    return readListResponse(response.data, 'Eingeschriebene Kurse').map(mapCourseCatalogItemFromBackend)
+  }
+
+  async getAvailableCourses(): Promise<CourseAndParticipationPL[]> {
+    const response = await apiClient.get<MaybeListResponse<BackendCourseCatalogItem>>('/courses/available')
+
+    return readListResponse(response.data, 'Verfügbare Kurse').map(mapCourseCatalogItemFromBackend)
   }
 
   async postCourse(course: CoursePL) {
@@ -139,8 +421,12 @@ class CourseService {
     return { data: mapCourseFromBackend(response.data) }
   }
 
-  joinCourse(courseId: CourseId, key: string, userId: number) {
-    return apiClient.post(`/courses/${courseId}/join`, { key, userId })
+  enrollCourse(courseId: CourseId, key?: string) {
+    return apiClient.post(`/courses/${courseId}/enroll`, { key })
+  }
+
+  joinCourse(courseId: CourseId, key: string) {
+    return this.enrollCourse(courseId, key)
   }
 
   leaveCourse(courseId: CourseId, userId?: number) {
@@ -160,15 +446,120 @@ class CourseService {
     return apiClient.delete(`/courses/${courseId}`)
   }
 
-  async getCourseMembers(courseId: CourseId) {
-    const response = await apiClient.get<BackendEnrollment[]>(`/courses/${courseId}/members`)
-    return { data: response.data.map(mapEnrollmentToMember) }
+  async getCourseMembers(courseId: CourseId, courseRunId?: string) {
+    const path = courseRunId ? `/courses/${courseId}/runs/${courseRunId}/enrollments` : `/courses/${courseId}/members`
+    const response = await apiClient.get<MaybeListResponse<BackendEnrollment>>(path)
+    return {
+      data: readListResponse(response.data, 'Kursmitglieder').map(mapEnrollmentToMember)
+    }
   }
 
-  getCourseMembersAsMap(courseId: CourseId): Promise<Map<number, Member>> {
+  async listCourseVersions(courseId: CourseId, courseRunId?: string): Promise<CourseVersion[]> {
+    const path = courseRunId ? `/courses/${courseId}/runs/${courseRunId}/versions` : `/courses/${courseId}/versions`
+    const response = await apiClient.get<MaybeListResponse<BackendCourseVersion>>(path)
+
+    return readListResponse(response.data, 'Kursversionen').map(mapCourseVersionFromBackend)
+  }
+
+  async listCourseVersionTemplates(courseId: CourseId): Promise<CourseVersion[]> {
+    const response = await apiClient.get<MaybeListResponse<BackendCourseVersion>>(`/courses/${courseId}/content-version-templates`)
+
+    return readListResponse(response.data, 'Kursversionsvorlagen').map(mapCourseVersionFromBackend)
+  }
+
+  async getCourseVersion(courseId: CourseId, versionId: string): Promise<CourseVersion> {
+    const response = await apiClient.get<BackendCourseVersion>(`/courses/${courseId}/versions/${versionId}`)
+
+    return mapCourseVersionFromBackend(response.data)
+  }
+
+  async createCourseVersion(
+    courseId: CourseId,
+    changeSummary: string,
+    activate = true,
+    courseRunId?: string,
+    options: { copyMode?: 'ACTIVE' | 'SOURCE' | 'EMPTY'; sourceVersionId?: string; label?: string } = {}
+  ): Promise<CourseVersion> {
+    const path = courseRunId ? `/courses/${courseId}/runs/${courseRunId}/versions` : `/courses/${courseId}/versions`
+    const payload: Record<string, unknown> = {
+      activate,
+      changeSummary
+    }
+
+    if (options.copyMode) payload.copyMode = options.copyMode
+    if (options.sourceVersionId) payload.sourceVersionId = options.sourceVersionId
+    if (options.label) payload.label = options.label
+
+    const response = await apiClient.post<BackendCourseVersion>(path, payload)
+
+    return mapCourseVersionFromBackend(response.data)
+  }
+
+  async activateCourseVersion(courseId: CourseId, versionId: string, courseRunId?: string): Promise<CourseVersion> {
+    const path = courseRunId
+      ? `/courses/${courseId}/runs/${courseRunId}/versions/${versionId}/activate`
+      : `/courses/${courseId}/versions/${versionId}/activate`
+    const response = await apiClient.post<BackendCourseVersion>(path)
+
+    return mapCourseVersionFromBackend(response.data)
+  }
+
+  async listCourseRuns(courseId: CourseId): Promise<CourseRun[]> {
+    const response = await apiClient.get<MaybeListResponse<BackendCourseRun>>(`/courses/${courseId}/runs`)
+
+    return readListResponse(response.data, 'Kursdurchläufe').map(mapCourseRunFromBackend)
+  }
+
+  async getCurrentCourseRun(courseId: CourseId): Promise<CourseRun> {
+    const response = await apiClient.get<BackendCourseRun>(`/courses/${courseId}/runs/current`)
+
+    return mapCourseRunFromBackend(response.data)
+  }
+
+  async createCourseRun(courseId: CourseId, payload: CreateCourseRunPayload = {}): Promise<CourseRun> {
+    const response = await apiClient.post<BackendCourseRun>(`/courses/${courseId}/runs/next`, payload)
+
+    return mapCourseRunFromBackend(response.data)
+  }
+
+  async createSpecialCourseRun(courseId: CourseId, payload: CreateCourseRunPayload = {}): Promise<CourseRun> {
+    const response = await apiClient.post<BackendCourseRun>(`/courses/${courseId}/runs/special`, payload)
+
+    return mapCourseRunFromBackend(response.data)
+  }
+
+  async getCourseRunPlan(courseId: CourseId): Promise<CourseRunPlan> {
+    const response = await apiClient.get<BackendCourseRunPlan>(`/courses/${courseId}/run-plan`)
+
+    return mapCourseRunPlanFromBackend(response.data)
+  }
+
+  async updateCourseRunPlanTemplate(courseId: CourseId, payload: UpdateCourseRunPlanTemplatePayload): Promise<CourseRunPlan> {
+    const response = await apiClient.post<BackendCourseRunPlan>(`/courses/${courseId}/run-plan/template`, payload)
+
+    return mapCourseRunPlanFromBackend(response.data)
+  }
+
+  async activateCourseRun(courseId: CourseId, runId: string): Promise<CourseRun> {
+    const response = await apiClient.post<BackendCourseRun>(`/courses/${courseId}/runs/${runId}/activate`)
+
+    return mapCourseRunFromBackend(response.data)
+  }
+
+  async deleteOrArchiveCourseRun(courseId: CourseId, runId: string): Promise<CourseRunDeletion> {
+    const response = await apiClient.delete<BackendCourseRunDeletion>(`/courses/${courseId}/runs/${runId}`)
+
+    return mapCourseRunDeletionFromBackend(response.data)
+  }
+
+  async deleteCourseVersion(courseId: CourseId, courseRunId: string, versionId: string): Promise<void> {
+    await apiClient.delete(`/courses/${courseId}/runs/${courseRunId}/versions/${versionId}`)
+  }
+
+  getCourseMembersAsMap(courseId: CourseId, courseRunId?: string): Promise<Map<number, Member>> {
     const map: Map<number, Member> = new Map()
     return new Promise<Map<number, Member>>((resolve) => {
-      this.getCourseMembers(courseId).then((response) => {
+      this.getCourseMembers(courseId, courseRunId).then((response) => {
         response.data.forEach((element: Member) => {
           map.set(element.user.id, element)
         })

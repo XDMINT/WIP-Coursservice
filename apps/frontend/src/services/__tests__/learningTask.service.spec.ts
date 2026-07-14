@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import learningTaskService, { TaskProgressStatus, TaskUnlockMode, formatTaskStatus, formatUnlockMode } from '../learningTask.service'
 import { apiClient } from '../apiClient'
@@ -13,6 +13,10 @@ vi.mock('../apiClient', () => ({
 }))
 
 describe('learningTaskService', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('loads the student learning path through a relative course API path', async () => {
     vi.mocked(apiClient.get).mockResolvedValueOnce({
       data: {
@@ -25,6 +29,18 @@ describe('learningTaskService', () => {
       courseId: 'course-id'
     })
     expect(apiClient.get).toHaveBeenCalledWith('/courses/course-id/tasks/my-progress')
+  })
+
+  it('loads teacher task and progress data through selected course run API paths', async () => {
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [] })
+
+    await expect(learningTaskService.listTasks('course-id', 'run-id')).resolves.toEqual([])
+    await expect(learningTaskService.getProgressOverview('course-id', 'run-id')).resolves.toEqual([])
+
+    expect(apiClient.get).toHaveBeenNthCalledWith(1, '/courses/course-id/runs/run-id/tasks')
+    expect(apiClient.get).toHaveBeenNthCalledWith(2, '/courses/course-id/runs/run-id/progress')
   })
 
   it('starts and completes tasks through actor-aware task endpoints', async () => {

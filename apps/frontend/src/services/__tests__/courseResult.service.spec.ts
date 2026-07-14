@@ -56,6 +56,28 @@ describe('courseResultService', () => {
     })
   })
 
+  it('lists course results for a selected run', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      data: {
+        items: [],
+        page: 1,
+        pageSize: 10,
+        total: 0
+      }
+    })
+
+    await courseResultService.listResults('course-id', { page: 1, pageSize: 10 }, 'run-id')
+
+    expect(apiClient.get).toHaveBeenCalledWith('/courses/course-id/runs/run-id/results', {
+      params: {
+        page: 1,
+        pageSize: 10,
+        passStatus: undefined,
+        source: undefined
+      }
+    })
+  })
+
   it('stores manual results and triggers recalculation endpoints', async () => {
     vi.mocked(apiClient.put).mockResolvedValueOnce({ data: { studentId: '3' } })
     vi.mocked(apiClient.post)

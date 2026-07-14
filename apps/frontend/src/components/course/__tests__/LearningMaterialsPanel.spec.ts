@@ -17,9 +17,17 @@ const materialServiceMock = vi.hoisted(() => ({
   uploadMaterial: vi.fn(),
   withdrawMaterial: vi.fn()
 }))
+const taskServiceMock = vi.hoisted(() => ({
+  listTasks: vi.fn()
+}))
 
 vi.mock('@/services/learningMaterial.service', () => ({
   default: materialServiceMock,
+  LearningMaterialReleaseMode: {
+    AFTER_TASK_COMPLETION: 'AFTER_TASK_COMPLETION',
+    IMMEDIATE: 'IMMEDIATE',
+    SCHEDULED: 'SCHEDULED'
+  },
   LearningMaterialPublicationStatus: {
     ARCHIVED: 'ARCHIVED',
     DRAFT: 'DRAFT',
@@ -35,6 +43,10 @@ vi.mock('@/services/learningMaterial.service', () => ({
   formatLearningMaterialFileSize: (size?: number) => (size == null ? '' : `${size} B`)
 }))
 
+vi.mock('@/services/learningTask.service', () => ({
+  default: taskServiceMock
+}))
+
 vi.mock('@/services/apiErrors', () => ({
   getApiErrorMessage: (error: Error) => error.message
 }))
@@ -44,8 +56,8 @@ const passThroughStub = {
 }
 const buttonStub = {
   emits: ['click'],
-  props: ['icon', 'prependIcon'],
-  template: '<button type="button" @click="$emit(\'click\')"><span>{{ icon }}</span><span>{{ prependIcon }}</span><slot /></button>'
+  props: ['disabled', 'icon', 'prependIcon'],
+  template: '<button type="button" :disabled="disabled" @click="$emit(\'click\')"><span>{{ icon }}</span><span>{{ prependIcon }}</span><slot /></button>'
 }
 const formControlStub = {
   props: ['label'],
@@ -62,9 +74,12 @@ const materialsFixture = [
     tags: ['demo'],
     fileSize: 2048,
     isPublished: true,
+    locked: false,
     publicationStatus: 'PUBLISHED',
     publishedAt: '2026-01-02T10:00:00.000Z',
+    releaseMode: 'IMMEDIATE',
     updatedAt: '2026-01-02T10:00:00.000Z',
+    visibleForStudents: true,
     originalFileName: 'folien.pdf'
   },
   {
@@ -76,18 +91,22 @@ const materialsFixture = [
     tags: [],
     fileSize: undefined,
     isPublished: false,
+    locked: false,
     publicationStatus: 'DRAFT',
     publishedAt: null,
+    releaseMode: 'IMMEDIATE',
     updatedAt: '2026-01-03T10:00:00.000Z',
+    visibleForStudents: false,
     url: 'https://example.com'
   }
 ]
 
-const mountPanel = (canManage = false) =>
+const mountPanel = (canManage = false, extraProps: Partial<InstanceType<typeof LearningMaterialsPanel>['$props']> = {}) =>
   mount(LearningMaterialsPanel, {
     props: {
       canManage,
-      courseId: 'course-id'
+      courseId: 'course-id',
+      ...extraProps
     },
     global: {
       stubs: {
@@ -140,6 +159,7 @@ const findButtonByText = (wrapper: ReturnType<typeof mount>, text: string) => wr
 describe('LearningMaterialsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    taskServiceMock.listTasks.mockResolvedValue([])
   })
 
   it('shows a loading state while materials are requested', async () => {
@@ -202,5 +222,58 @@ describe('LearningMaterialsPanel', () => {
     expect(wrapper.text()).toContain('Material bearbeiten')
     expect(wrapper.text()).toContain('Beschreibung')
     expect(wrapper.text()).toContain('Tags')
+  })
+
+  it('loads materials for the selected run and clears stale historical content', async () => {
+    materialServiceMock.listMaterials.mockResolvedValueOnce(materialsFixture).mockResolvedValueOnce([])
+
+    const wrapper = mountPanel(true, {
+      courseRunId: 'run-1',
+      readOnly: true
+    })
+    await flushPromises()
+
+    expect(materialServiceMock.listMaterials).toHaveBeenCalledWith('course-id', 'run-1', undefined)
+    expect(wrapper.text()).toContain('Grundlagenfolien')
+    expect(wrapper.text()).toContain('Historischer Kursdurchlauf')
+    expect(wrapper.text()).not.toContain('Datei hochladen')
+
+    await wrapper.setProps({ courseRunId: 'run-2' })
+    await flushPromises()
+
+    expect(materialServiceMock.listMaterials).toHaveBeenLastCalledWith('course-id', 'run-2', undefined)
+    expect(wrapper.text()).toContain('In diesem Kursdurchlauf sind keine Materialien vorhanden.')
+    expect(wrapper.text()).not.toContain('Grundlagenfolien')
+  })
+
+  it('ignores selected run ids for students and uses the active-run endpoint', async () => {
+    materialServiceMock.listMaterials.mockResolvedValueOnce([])
+
+    mountPanel(false, {
+      courseRunId: 'historical-run'
+    })
+    await flushPromises()
+
+    expect(materialServiceMock.listMaterials).toHaveBeenCalledWith('course-id', undefined, undefined)
+  })
+
+  it('shows locked material hints and disables opening them for students', async () => {
+    materialServiceMock.listMaterials.mockResolvedValueOnce([
+      {
+        ...materialsFixture[0],
+        id: 'locked-material',
+        locked: true,
+        lockedReason: 'Wird sichtbar, sobald Aufgabe "Grundlagen" erfolgreich abgeschlossen wurde.',
+        releaseMode: 'AFTER_TASK_COMPLETION',
+        visibleForStudents: false
+      }
+    ])
+
+    const wrapper = mountPanel(false)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Gesperrt')
+    expect(wrapper.text()).toContain('Wird sichtbar, sobald Aufgabe "Grundlagen" erfolgreich abgeschlossen wurde.')
+    expect(wrapper.find('button').attributes('disabled')).toBeDefined()
   })
 })

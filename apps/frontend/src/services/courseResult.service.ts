@@ -114,8 +114,9 @@ class CourseResultService {
     return response.data
   }
 
-  async listResults(courseId: string | number, params: CourseResultListParams = {}): Promise<CourseResultList> {
-    const response = await apiClient.get<CourseResultList>(`/courses/${courseId}/results`, {
+  async listResults(courseId: string | number, params: CourseResultListParams = {}, courseRunId?: string): Promise<CourseResultList> {
+    const path = courseRunId ? `/courses/${courseId}/runs/${courseRunId}/results` : `/courses/${courseId}/results`
+    const response = await apiClient.get<CourseResultList>(path, {
       params: {
         page: params.page,
         pageSize: params.pageSize,

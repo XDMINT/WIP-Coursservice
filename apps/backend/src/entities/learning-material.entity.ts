@@ -16,6 +16,9 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Course } from './course.entity';
+import { CourseRun } from './course-run.entity';
+import { CourseVersion } from './course-version.entity';
+import { Task } from './task.entity';
 
 export enum LearningMaterialType {
   DOCUMENT = 'DOCUMENT',
@@ -29,6 +32,12 @@ export enum LearningMaterialPublicationStatus {
   DRAFT = 'DRAFT',
   PUBLISHED = 'PUBLISHED',
   ARCHIVED = 'ARCHIVED',
+}
+
+export enum LearningMaterialReleaseMode {
+  IMMEDIATE = 'IMMEDIATE',
+  AFTER_TASK_COMPLETION = 'AFTER_TASK_COMPLETION',
+  SCHEDULED = 'SCHEDULED',
 }
 
 /**
@@ -110,6 +119,22 @@ export class LearningMaterial {
   @Column({ type: 'timestamptz', nullable: true })
   archivedAt?: Date;
 
+  @Column({ type: 'varchar', default: LearningMaterialReleaseMode.IMMEDIATE })
+  releaseMode: LearningMaterialReleaseMode;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  releaseAt?: Date | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  releaseAfterTaskId?: string | null;
+
+  @ManyToOne(() => Task, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'releaseAfterTaskId' })
+  releaseAfterTask?: Task | null;
+
   /**
    * File path for uploaded materials
    * @example "/uploads/course-123/slides.pdf"
@@ -161,4 +186,24 @@ export class LearningMaterial {
   @ManyToOne(() => Course, (course) => course.learningMaterials)
   @JoinColumn({ name: 'courseId' })
   course: Course;
+
+  @Column({ name: 'courseRunId', type: 'uuid', nullable: true })
+  courseRunId?: string;
+
+  @ManyToOne(() => CourseRun, (run) => run.learningMaterials, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'courseRunId' })
+  courseRun?: CourseRun;
+
+  @Column({ name: 'courseVersionId', type: 'uuid', nullable: true })
+  courseVersionId?: string;
+
+  @ManyToOne(() => CourseVersion, (version) => version.learningMaterials, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'courseVersionId' })
+  courseVersion?: CourseVersion;
 }

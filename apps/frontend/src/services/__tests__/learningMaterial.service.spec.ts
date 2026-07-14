@@ -20,6 +20,13 @@ describe('learningMaterialService', () => {
     expect(apiClient.get).toHaveBeenCalledWith('/courses/course-id/materials')
   })
 
+  it('loads materials through a selected course run API path', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: [] })
+
+    await expect(learningMaterialService.listMaterials('course-id', 'run-id')).resolves.toEqual([])
+    expect(apiClient.get).toHaveBeenCalledWith('/courses/course-id/runs/run-id/materials')
+  })
+
   it('uploads files with progress callback', async () => {
     vi.mocked(apiClient.post).mockImplementationOnce((url, body, config: any) => {
       config.onUploadProgress({ loaded: 50, total: 100 })

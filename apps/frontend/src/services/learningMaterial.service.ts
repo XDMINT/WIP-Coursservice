@@ -14,9 +14,17 @@ export enum LearningMaterialPublicationStatus {
   ARCHIVED = 'ARCHIVED'
 }
 
+export enum LearningMaterialReleaseMode {
+  IMMEDIATE = 'IMMEDIATE',
+  AFTER_TASK_COMPLETION = 'AFTER_TASK_COMPLETION',
+  SCHEDULED = 'SCHEDULED'
+}
+
 export type LearningMaterial = {
   id: string
   courseId: string
+  courseRunId?: string
+  courseVersionId?: string
   title: string
   description?: string
   type: LearningMaterialType
@@ -29,6 +37,13 @@ export type LearningMaterial = {
   sortOrder: number
   publicationStatus: LearningMaterialPublicationStatus
   isPublished: boolean
+  releaseMode: LearningMaterialReleaseMode
+  releaseAt?: string
+  releaseAfterTaskId?: string | null
+  releaseAfterTaskTitle?: string
+  visibleForStudents: boolean
+  locked: boolean
+  lockedReason?: string
   createdBy: string
   createdAt?: string
   updatedAt?: string
@@ -42,6 +57,9 @@ export type LearningMaterialMetadata = {
   url?: string
   tags?: string[]
   sortOrder?: number
+  releaseMode?: LearningMaterialReleaseMode
+  releaseAt?: string | null
+  releaseAfterTaskId?: string | null
 }
 
 export type UploadLearningMaterialInput = LearningMaterialMetadata & {
@@ -49,10 +67,17 @@ export type UploadLearningMaterialInput = LearningMaterialMetadata & {
 }
 
 const pathForCourseMaterials = (courseId: string | number) => `/courses/${courseId}/materials`
+const pathForCourseRunMaterials = (courseId: string | number, courseRunId?: string, courseVersionId?: string) => {
+  if (courseRunId && courseVersionId) {
+    return `/courses/${courseId}/runs/${courseRunId}/versions/${courseVersionId}/materials`
+  }
+
+  return courseRunId ? `/courses/${courseId}/runs/${courseRunId}/materials` : pathForCourseMaterials(courseId)
+}
 
 class LearningMaterialService {
-  async listMaterials(courseId: string | number): Promise<LearningMaterial[]> {
-    const response = await apiClient.get<LearningMaterial[]>(pathForCourseMaterials(courseId))
+  async listMaterials(courseId: string | number, courseRunId?: string, courseVersionId?: string): Promise<LearningMaterial[]> {
+    const response = await apiClient.get<LearningMaterial[]>(pathForCourseRunMaterials(courseId, courseRunId, courseVersionId))
     return response.data
   }
 
@@ -63,6 +88,13 @@ class LearningMaterialService {
     formData.append('type', input.type ?? LearningMaterialType.OTHER_FILE)
     formData.append('tags', JSON.stringify(input.tags ?? []))
     formData.append('sortOrder', String(input.sortOrder ?? 0))
+    formData.append('releaseMode', input.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE)
+    if (input.releaseAt) {
+      formData.append('releaseAt', input.releaseAt)
+    }
+    if (input.releaseAfterTaskId) {
+      formData.append('releaseAfterTaskId', input.releaseAfterTaskId)
+    }
     formData.append('file', input.file)
 
     const response = await apiClient.post<LearningMaterial>(`${pathForCourseMaterials(courseId)}/upload`, formData, {

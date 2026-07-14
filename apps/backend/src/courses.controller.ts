@@ -35,6 +35,17 @@ import { GroupMembership } from './entities/group-membership.entity';
 import { CalendarEvent } from './entities/calendar-event.entity';
 import { Course } from './entities/course.entity';
 import {
+  CourseCatalogItemResponseDto,
+  CourseRunDeletionResponseDto,
+  CourseRunPlanResponseDto,
+  CourseRunResponseDto,
+  CourseVersionResponseDto,
+  CreateCourseRunDto,
+  CreateCourseVersionDto,
+  EnrollmentResponseDto,
+  UpdateCourseRunPlanTemplateDto,
+} from './dto/course.dto';
+import {
   CreateLearningTaskDto,
   LearningPathResponseDto,
   LearningTaskResponseDto,
@@ -74,6 +85,24 @@ export class CoursesController {
     getCourses(@Query('userId') userId?: string) {
         return this.coursesService.findAll(
             userId != null ? userId : undefined,
+        );
+    }
+
+    @Get('available')
+    getAvailableCourses(
+        @Req() request: Request,
+    ): Promise<CourseCatalogItemResponseDto[]> {
+        return this.coursesService.getAvailableCourses(
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get('enrolled')
+    getEnrolledCourses(
+        @Req() request: Request,
+    ): Promise<CourseCatalogItemResponseDto[]> {
+        return this.coursesService.getEnrolledCourses(
+            getRequestActor(request).userId,
         );
     }
 
@@ -130,11 +159,24 @@ export class CoursesController {
     joinCourse(
         @Param('id') id: string,
         @Body() body: { key?: string; userId: number | string },
-    ) {
+    ): Promise<EnrollmentResponseDto> {
         return this.coursesService.joinCourse(
             id,
             body.userId,
             body.key,
+        );
+    }
+
+    @Post(':id/enroll')
+    enrollCourse(
+        @Param('id') id: string,
+        @Body() body: { key?: string },
+        @Req() request: Request,
+    ): Promise<EnrollmentResponseDto> {
+        return this.coursesService.enrollInCourse(
+            id,
+            getRequestActor(request).userId,
+            body?.key,
         );
     }
 
@@ -147,6 +189,371 @@ export class CoursesController {
         return this.coursesService.leaveCourse(
             id,
             body.userId != null ? body.userId : undefined,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Delete(':id/enrollment')
+    deleteOwnEnrollment(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<void> {
+        const actorId = getRequestActor(request).userId;
+
+        return this.coursesService.leaveCourse(
+            id,
+            actorId,
+            actorId,
+        );
+    }
+
+    @Get(':id/runs')
+    listCourseRuns(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto[]> {
+        return this.coursesService.listCourseRuns(
+            id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/current')
+    getCurrentCourseRun(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto> {
+        return this.coursesService.getCurrentCourseRun(
+            id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/materials')
+    getLearningMaterialsByCourseRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ) {
+        return this.coursesService.getLearningMaterialsByCourseRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/tasks')
+    getTasksByCourseRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<LearningTaskResponseDto[]> {
+        return this.coursesService.getTasksByCourseRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/enrollments')
+    getCourseMembersByRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<EnrollmentResponseDto[]> {
+        return this.coursesService.getCourseMembersByRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/progress')
+    getLearningTaskProgressOverviewByRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<StudentProgressOverviewDto[]> {
+        return this.coursesService.getLearningTaskProgressOverviewByRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/results')
+    getCourseResultsByRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Query() query: CourseResultListQueryDto,
+        @Req() request: Request,
+    ): Promise<CourseResultListResponseDto> {
+        return this.coursesService.getCourseResultsByRun(
+            id,
+            runId,
+            query,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/versions')
+    listCourseVersionsByRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto[]> {
+        return this.coursesService.listCourseVersionsByRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/versions/:versionId/materials')
+    getLearningMaterialsByCourseVersion(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('versionId') versionId: string,
+        @Req() request: Request,
+    ) {
+        return this.coursesService.getLearningMaterialsByCourseVersion(
+            id,
+            runId,
+            versionId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId/versions/:versionId/tasks')
+    getTasksByCourseVersion(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('versionId') versionId: string,
+        @Req() request: Request,
+    ): Promise<LearningTaskResponseDto[]> {
+        return this.coursesService.getTasksByCourseVersion(
+            id,
+            runId,
+            versionId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/:runId/versions')
+    createCourseVersionForRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Body() body: CreateCourseVersionDto,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto> {
+        return this.coursesService.createCourseVersionForRun(
+            id,
+            runId,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/:runId/versions/:versionId/activate')
+    activateCourseVersionForRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('versionId') versionId: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto> {
+        return this.coursesService.activateCourseVersionForRun(
+            id,
+            runId,
+            versionId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Delete(':id/runs/:runId/versions/:versionId')
+    deleteCourseVersion(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Param('versionId') versionId: string,
+        @Req() request: Request,
+    ): Promise<void> {
+        return this.coursesService.deleteCourseVersion(
+            id,
+            runId,
+            versionId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/run-plan')
+    getCourseRunPlan(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<CourseRunPlanResponseDto> {
+        return this.coursesService.getCourseRunPlan(
+            id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/run-plan/template')
+    updateCourseRunPlanTemplate(
+        @Param('id') id: string,
+        @Body() body: UpdateCourseRunPlanTemplateDto,
+        @Req() request: Request,
+    ): Promise<CourseRunPlanResponseDto> {
+        return this.coursesService.updateCourseRunPlanTemplate(
+            id,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/next')
+    createNextCourseRun(
+        @Param('id') id: string,
+        @Body() body: CreateCourseRunDto,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto> {
+        return this.coursesService.createCourseRun(
+            id,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/special')
+    createSpecialCourseRun(
+        @Param('id') id: string,
+        @Body() body: CreateCourseRunDto,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto> {
+        return this.coursesService.createSpecialCourseRun(
+            id,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/runs/:runId')
+    getCourseRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto> {
+        return this.coursesService.getCourseRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs')
+    createCourseRun(
+        @Param('id') id: string,
+        @Body() body: CreateCourseRunDto,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto> {
+        return this.coursesService.createSpecialCourseRun(
+            id,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/runs/:runId/activate')
+    activateCourseRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<CourseRunResponseDto> {
+        return this.coursesService.activateCourseRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Delete(':id/runs/:runId')
+    deleteOrArchiveCourseRun(
+        @Param('id') id: string,
+        @Param('runId') runId: string,
+        @Req() request: Request,
+    ): Promise<CourseRunDeletionResponseDto> {
+        return this.coursesService.deleteOrArchiveCourseRun(
+            id,
+            runId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/content-version-templates')
+    listContentVersionTemplates(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto[]> {
+        return this.coursesService.listCourseVersionTemplates(
+            id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/version-templates')
+    listCourseVersionTemplates(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto[]> {
+        return this.coursesService.listCourseVersionTemplates(
+            id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/versions')
+    listCourseVersions(
+        @Param('id') id: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto[]> {
+        return this.coursesService.listCourseVersions(
+            id,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/versions')
+    createCourseVersion(
+        @Param('id') id: string,
+        @Body() body: CreateCourseVersionDto,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto> {
+        return this.coursesService.createCourseVersion(
+            id,
+            body,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Get(':id/versions/:versionId')
+    getCourseVersion(
+        @Param('id') id: string,
+        @Param('versionId') versionId: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto> {
+        return this.coursesService.getCourseVersion(
+            id,
+            versionId,
+            getRequestActor(request).userId,
+        );
+    }
+
+    @Post(':id/versions/:versionId/activate')
+    activateCourseVersion(
+        @Param('id') id: string,
+        @Param('versionId') versionId: string,
+        @Req() request: Request,
+    ): Promise<CourseVersionResponseDto> {
+        return this.coursesService.activateCourseVersion(
+            id,
+            versionId,
             getRequestActor(request).userId,
         );
     }

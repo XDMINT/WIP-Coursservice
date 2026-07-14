@@ -69,11 +69,12 @@ const formControlStub = {
   template: '<label>{{ label }}</label>'
 }
 
-const mountPanel = (canManage = false) =>
+const mountPanel = (canManage = false, extraProps: Partial<InstanceType<typeof CourseResultsPanel>['$props']> = {}) =>
   mount(CourseResultsPanel, {
     props: {
       canManage,
-      courseId: 'course-id'
+      courseId: 'course-id',
+      ...extraProps
     },
     global: {
       stubs: {
@@ -170,6 +171,23 @@ describe('CourseResultsPanel', () => {
     expect(wrapper.text()).toContain('Gut gemacht.')
   })
 
+  it('ignores selected run ids for students and loads the own active result', async () => {
+    resultServiceMock.getMyResult.mockResolvedValueOnce({
+      courseId: 'course-id',
+      enrollmentId: 'enrollment-3',
+      passStatus: 'NOT_ASSESSED',
+      studentId: '3'
+    })
+
+    mountPanel(false, {
+      courseRunId: 'historical-run'
+    })
+    await flushPromises()
+
+    expect(resultServiceMock.getMyResult).toHaveBeenCalledWith('course-id')
+    expect(resultServiceMock.listResults).not.toHaveBeenCalled()
+  })
+
   it('shows API errors', async () => {
     resultServiceMock.getMyResult.mockRejectedValueOnce(new Error('Kein Zugriff'))
 
@@ -247,5 +265,32 @@ describe('CourseResultsPanel', () => {
 
     expect(resultServiceMock.saveManualResult).toHaveBeenCalledWith('course-id', '3', expect.objectContaining({ manualGrade: '2.0' }))
     expect(wrapper.text()).toContain('Bewertung gespeichert.')
+  })
+
+  it('loads historical results by run and hides editing actions', async () => {
+    resultServiceMock.listResults.mockResolvedValueOnce({
+      items: [automaticResult],
+      page: 1,
+      pageSize: 10,
+      total: 1
+    })
+
+    const wrapper = mountPanel(true, {
+      courseRunId: 'run-1',
+      readOnly: true
+    })
+    await flushPromises()
+
+    expect(resultServiceMock.listResults).toHaveBeenCalledWith(
+      'course-id',
+      expect.objectContaining({
+        page: 1,
+        pageSize: 10
+      }),
+      'run-1'
+    )
+    expect(wrapper.text()).toContain('Historischer Kursdurchlauf')
+    expect(wrapper.text()).not.toContain('Bewerten')
+    expect(wrapper.text()).not.toContain('Berechnen')
   })
 })

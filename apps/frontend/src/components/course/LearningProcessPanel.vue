@@ -11,19 +11,23 @@
     <v-progress-linear v-if="loading" class="mb-4" color="primary" indeterminate />
 
     <template v-else-if="canManage">
+      <v-alert v-if="readOnly" class="mb-4" type="info" variant="tonal">
+        Historischer Kursdurchlauf: Aufgaben und Fortschritt werden schreibgeschützt angezeigt.
+      </v-alert>
+
       <section class="process-section">
         <div class="section-toolbar">
           <div>
             <h2>Aufgabenverwaltung</h2>
             <p>Freischaltmodus, Voraussetzung und Reihenfolge konfigurieren.</p>
           </div>
-          <v-btn color="primary" variant="outlined" @click="showCreateForm = !showCreateForm">
+          <v-btn v-if="canEdit" color="primary" variant="outlined" @click="showCreateForm = !showCreateForm">
             <v-icon start> mdi-plus </v-icon>
             Neue Aufgabe
           </v-btn>
         </div>
 
-        <div v-if="showCreateForm" class="task-form">
+        <div v-if="canEdit && showCreateForm" class="task-form">
           <v-text-field v-model="newTask.title" label="Titel" density="compact" />
           <v-text-field v-model="newTask.description" label="Beschreibung" density="compact" />
           <div class="task-form__grid">
@@ -44,13 +48,13 @@
 
         <div v-else class="teacher-task-list">
           <div v-for="task in sortedTasks" :key="task.id" class="teacher-task-row" data-testid="teacher-task-row">
-            <v-text-field v-model.number="task.order" label="Reihenfolge" type="number" density="compact" hide-details />
-            <v-text-field v-model="task.title" label="Titel" density="compact" hide-details />
-            <v-text-field v-model="task.description" label="Beschreibung" density="compact" hide-details />
-            <v-select v-model="task.unlockMode" :items="unlockModeOptions" label="Freischaltmodus" density="compact" hide-details />
-            <v-select v-model="task.prerequisiteTaskId" :items="getPrerequisiteOptions(task)" item-title="title" item-value="id" label="Voraussetzung" density="compact" hide-details clearable :disabled="task.unlockMode === TaskUnlockMode.IMMEDIATE" />
-            <v-switch v-model="task.isPublished" label="Freigegeben" color="primary" hide-details />
-            <div class="row-actions">
+            <v-text-field v-model.number="task.order" label="Reihenfolge" type="number" density="compact" hide-details :disabled="!canEdit" />
+            <v-text-field v-model="task.title" label="Titel" density="compact" hide-details :disabled="!canEdit" />
+            <v-text-field v-model="task.description" label="Beschreibung" density="compact" hide-details :disabled="!canEdit" />
+            <v-select v-model="task.unlockMode" :items="unlockModeOptions" label="Freischaltmodus" density="compact" hide-details :disabled="!canEdit" />
+            <v-select v-model="task.prerequisiteTaskId" :items="getPrerequisiteOptions(task)" item-title="title" item-value="id" label="Voraussetzung" density="compact" hide-details clearable :disabled="!canEdit || task.unlockMode === TaskUnlockMode.IMMEDIATE" />
+            <v-switch v-model="task.isPublished" label="Freigegeben" color="primary" hide-details :disabled="!canEdit" />
+            <div v-if="canEdit" class="row-actions">
               <v-btn size="small" color="primary" :disabled="Boolean(getTaskValidationMessage(task))" @click="saveTask(task)"> Speichern </v-btn>
               <v-btn size="small" variant="text" color="error" @click="requestDeleteTask(task)"> Löschen </v-btn>
             </div>
@@ -166,6 +170,9 @@ import { getTaskStatusPresentation } from '@/services/statusPresentation'
 const props = defineProps<{
   courseId: string | number
   canManage: boolean
+  courseRunId?: string
+  courseVersionId?: string
+  readOnly?: boolean
 }>()
 
 const loading = ref(false)
@@ -200,6 +207,10 @@ const unlockModeOptions = [TaskUnlockMode.IMMEDIATE, TaskUnlockMode.AUTOMATIC, T
 
 const sortedTasks = computed(() => [...tasks.value].sort((a, b) => a.order - b.order))
 const studentTasks = computed(() => learningPath.value?.tasks ?? [])
+const canEdit = computed(() => props.canManage && props.readOnly !== true)
+const readOnly = computed(() => props.canManage && props.readOnly === true)
+const effectiveCourseRunId = computed(() => (props.canManage ? props.courseRunId : undefined))
+const effectiveCourseVersionId = computed(() => (props.canManage ? props.courseVersionId : undefined))
 const progressSummary = computed(() => {
   if (!learningPath.value) return 'Fortschritt wird geladen.'
   if (learningPath.value.totalTasks === 0) return 'Noch keine Aufgaben verfügbar.'
@@ -228,7 +239,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.courseId, props.canManage],
+  () => [props.courseId, effectiveCourseRunId.value, effectiveCourseVersionId.value, props.canManage, props.readOnly],
   () => loadData()
 )
 
@@ -260,7 +271,9 @@ const loadStudentData = () =>
 
 const loadTeacherData = () =>
   withLoading(async () => {
-    const [loadedTasks, loadedOverview] = await Promise.all([learningTaskService.listTasks(props.courseId), learningTaskService.getProgressOverview(props.courseId)])
+    tasks.value = []
+    progressOverview.value = []
+    const [loadedTasks, loadedOverview] = await Promise.all([learningTaskService.listTasks(props.courseId, effectiveCourseRunId.value, effectiveCourseVersionId.value), learningTaskService.getProgressOverview(props.courseId, effectiveCourseRunId.value)])
     tasks.value = loadedTasks
     progressOverview.value = loadedOverview
   })
@@ -275,6 +288,11 @@ const resetNewTask = () => {
 }
 
 const submitNewTask = async () => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Aufgaben historischer Durchläufe können nicht bearbeitet werden.'
+    return
+  }
+
   if (newTaskValidationMessage.value) {
     errorMessage.value = newTaskValidationMessage.value
     return
@@ -353,6 +371,11 @@ const getTaskValidationMessage = (task: LearningTask): string => {
 }
 
 const saveTask = async (task: LearningTask) => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Aufgaben historischer Durchläufe können nicht bearbeitet werden.'
+    return
+  }
+
   const validationMessage = getTaskValidationMessage(task)
 
   if (validationMessage) {
@@ -378,6 +401,8 @@ const saveTask = async (task: LearningTask) => {
 }
 
 const requestDeleteTask = (task: LearningTask) => {
+  if (!canEdit.value) return
+
   openConfirmation('Aufgabe löschen', `Soll "${task.title}" wirklich gelöscht werden?`, async () => {
     await learningTaskService.deleteTask(task.id)
     successMessage.value = 'Aufgabe gelöscht.'
@@ -405,7 +430,7 @@ const requestTaskResult = (task: StudentLearningTask, result: 'complete' | 'fail
   })
 }
 
-const canManuallyUnlock = (taskId: string, status: TaskProgressStatus) => status === TaskProgressStatus.LOCKED && tasks.value.find((task) => task.id === taskId)?.unlockMode === TaskUnlockMode.MANUAL
+const canManuallyUnlock = (taskId: string, status: TaskProgressStatus) => canEdit.value && status === TaskProgressStatus.LOCKED && tasks.value.find((task) => task.id === taskId)?.unlockMode === TaskUnlockMode.MANUAL
 
 const upsertProgressOverview = (updatedOverview: StudentProgressOverview) => {
   const existingIndex = progressOverview.value.findIndex((student) => student.studentId === updatedOverview.studentId)
@@ -419,6 +444,11 @@ const upsertProgressOverview = (updatedOverview: StudentProgressOverview) => {
 }
 
 const manualUnlock = async (taskId: string, studentId: string) => {
+  if (!canEdit.value) {
+    errorMessage.value = 'Fortschritt historischer Durchläufe kann nicht bearbeitet werden.'
+    return
+  }
+
   try {
     const updatedOverview = await learningTaskService.manuallyUnlockTask(taskId, studentId)
     upsertProgressOverview(updatedOverview)

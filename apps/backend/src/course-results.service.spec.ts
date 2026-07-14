@@ -10,6 +10,7 @@ import {
   CourseResultSource,
 } from './entities/course-result.entity';
 import { Course, CourseStatus } from './entities/course.entity';
+import { CourseRun, CourseRunStatus } from './entities/course-run.entity';
 import { CourseMemberRole, Enrollment } from './entities/enrollment.entity';
 import { Grade } from './entities/grade.entity';
 
@@ -31,10 +32,27 @@ const createEnrollment = (
   ({
     id: `enrollment-${userId}`,
     courseId: 'course-id',
+    courseRunId: 'course-run-id',
     userId,
     role,
     ...overrides,
   }) as Enrollment;
+
+const createCourseRun = (course: Course, overrides: Partial<CourseRun> = {}): CourseRun =>
+  ({
+    id: course.id === 'course-id' ? 'course-run-id' : `${course.id}-run-id`,
+    courseId: course.id,
+    course,
+    label: 'Sommersemester 2026',
+    startDate: '2026-04-01',
+    endDate: '2026-09-30',
+    status: CourseRunStatus.PUBLISHED,
+    isActive: true,
+    createdBy: '1',
+    createdAt: new Date('2026-01-01T10:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T10:00:00.000Z'),
+    ...overrides,
+  }) as CourseRun;
 
 const createAssignment = (
   overrides: Partial<Assignment> = {},
@@ -52,6 +70,7 @@ const createAssignment = (
     createdBy: '1',
     updatedBy: '1',
     course: createCourse(),
+    courseRunId: 'course-run-id',
     ...overrides,
   }) as Assignment;
 
@@ -163,24 +182,37 @@ const createFixture = (options: {
     external_id: 'other-course',
     owner_id: 8,
   });
-  const student3 = createEnrollment('3', CourseMemberRole.STUDENT);
-  const student4 = createEnrollment('4', CourseMemberRole.STUDENT);
+  const currentRun = createCourseRun(course);
+  const otherRun = createCourseRun(otherCourse);
+  const student3 = createEnrollment('3', CourseMemberRole.STUDENT, {
+    courseRun: currentRun,
+  });
+  const student4 = createEnrollment('4', CourseMemberRole.STUDENT, {
+    courseRun: currentRun,
+  });
   const enrollments = [
-    createEnrollment('1', CourseMemberRole.TEACHER),
+    createEnrollment('1', CourseMemberRole.TEACHER, {
+      courseRun: currentRun,
+    }),
     student3,
     student4,
     createEnrollment('8', CourseMemberRole.TEACHER, {
       courseId: 'other-course-id',
+      courseRunId: otherRun.id,
+      courseRun: otherRun,
       id: 'other-enrollment-8',
     }),
   ];
   const courseRepository = createRepository([course, otherCourse], 'course');
+  const courseRunRepository = createRepository([currentRun, otherRun], 'run');
   const enrollmentRepository = createRepository(enrollments, 'enrollment');
   const assignmentRepository = createRepository(options.assignments ?? [], 'assignment');
   const gradeRepository = createRepository(options.grades ?? [], 'grade');
   const resultRepository = createRepository(options.results ?? [], 'result');
   const service = new CoursesService(
     courseRepository as any,
+    courseRunRepository as any,
+    emptyRepository() as any,
     emptyRepository() as any,
     assignmentRepository as any,
     gradeRepository as any,
@@ -347,6 +379,7 @@ describe('CoursesService course results', () => {
       id: 'result-3',
       assessmentMode: CourseResultMode.MANUAL,
       courseId: 'course-id',
+      courseRunId: 'course-run-id',
       enrollmentId: 'enrollment-3',
       studentId: '3',
       passStatus: CoursePassStatus.PASSED,
@@ -411,6 +444,7 @@ describe('CoursesService course results', () => {
           id: 'result-3',
           assessmentMode: CourseResultMode.MANUAL,
           courseId: 'course-id',
+          courseRunId: 'course-run-id',
           enrollmentId: 'enrollment-3',
           studentId: '3',
           passStatus: CoursePassStatus.PASSED,

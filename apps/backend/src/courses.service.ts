@@ -14,6 +14,7 @@ import { Readable } from 'stream';
 import {
   LearningMaterial,
   LearningMaterialPublicationStatus,
+  LearningMaterialReleaseMode,
   LearningMaterialType,
 } from './entities/learning-material.entity';
 import { Assignment } from './entities/assignment.entity';
@@ -33,7 +34,13 @@ import {
 } from './entities/task-progress.entity';
 import { ContentRelease, ReleaseType } from './entities/content-release.entity';
 import { ContentTemplate } from './entities/content-template.entity';
-import { Course, CourseStatus } from './entities/course.entity';
+import { Course, CourseRunTemplateStrategy, CourseStatus } from './entities/course.entity';
+import {
+  CourseRecurrenceType,
+  CourseRun,
+  CourseRunStatus,
+} from './entities/course-run.entity';
+import { CourseVersion, CourseVersionStatus } from './entities/course-version.entity';
 import { CourseGroup } from './entities/course-group.entity';
 import { GroupMembership } from './entities/group-membership.entity';
 import { CalendarEvent } from './entities/calendar-event.entity';
@@ -45,10 +52,21 @@ import {
 } from './common/api-errors';
 import {
   CourseContextResponseDto,
+  CourseCatalogItemResponseDto,
   CourseResponseDto,
+  CourseRunDeletionResponseDto,
+  CourseRunPlanResponseDto,
+  CourseRunResponseDto,
+  CourseVersionResponseDto,
+  CreateCourseRunDto,
+  CreateCourseVersionDto,
   EnrollmentResponseDto,
+  UpdateCourseRunPlanTemplateDto,
   mapCourseContextToDto,
+  mapCourseToCatalogItemDto,
   mapCourseToDto,
+  mapCourseRunToDto,
+  mapCourseVersionToDto,
   mapEnrollmentToDto,
 } from './dto/course.dto';
 import {
@@ -104,7 +122,51 @@ export type LearningMaterialDownload = {
   stream: Readable;
   fileName: string;
   mimeType: string;
+  fileSize?: number | string;
+};
+
+type LearningMaterialVisibility = {
+  visible: boolean;
+  locked: boolean;
+  lockedReason?: string;
+  releaseAfterTaskTitle?: string;
+  visibleForStudents: boolean;
+};
+
+type CourseVersionSnapshotTask = {
+  id?: string;
+  title?: string;
+  description?: string;
+  type?: string;
+  order?: number;
+  unlockMode?: TaskUnlockMode | string;
+  prerequisiteTaskId?: string | null;
+  completionCriteria?: unknown;
+  isPublished?: boolean;
+  demoKey?: string | null;
+};
+
+type CourseVersionSnapshotMaterial = {
+  id?: string;
+  title?: string;
+  description?: string;
+  content?: string;
+  type?: LearningMaterialType | string;
+  url?: string;
+  originalFileName?: string;
+  storageKey?: string;
+  mimeType?: string;
   fileSize?: number;
+  previewMetadata?: Record<string, unknown>;
+  tags?: string[];
+  sortOrder?: number;
+  publicationStatus?: LearningMaterialPublicationStatus | string;
+  isPublished?: boolean;
+  releaseMode?: LearningMaterialReleaseMode | string;
+  releaseAt?: string | null;
+  releaseAfterTaskId?: string | null;
+  filePath?: string;
+  publishedAt?: string | null;
 };
 
 const maxMaterialFileSizeBytes = () =>
@@ -140,7 +202,7 @@ export const ALLOWED_MATERIAL_MIME_TYPES = [
 export class CoursesService {
   /**
    * Constructor with dependency injection
-   * 
+   *
    * @param {Repository<Course>} coursesRepository - Course repository
    * @param {Repository<LearningMaterial>} learningMaterialRepository - Learning material repository
    * @param {Repository<Assignment>} assignmentRepository - Assignment repository
@@ -157,6 +219,10 @@ export class CoursesService {
   constructor(
     @InjectRepository(Course)
     private coursesRepository: Repository<Course>,
+    @InjectRepository(CourseRun)
+    private courseRunRepository: Repository<CourseRun>,
+    @InjectRepository(CourseVersion)
+    private courseVersionRepository: Repository<CourseVersion>,
     @InjectRepository(LearningMaterial)
     private learningMaterialRepository: Repository<LearningMaterial>,
     @InjectRepository(Assignment)
@@ -186,7 +252,7 @@ export class CoursesService {
 
   /**
    * Get hello message for testing
-   * 
+   *
    * @returns {string} A simple hello message
    */
   getHello(): string {
@@ -223,6 +289,265 @@ export class CoursesService {
     }
 
     return normalizedStatus;
+  }
+
+  private normalizeCourseRunStatus(status: unknown): CourseRunStatus | undefined {
+    if (status === undefined || status === null || status === '') {
+      return undefined;
+    }
+
+    const normalizedStatus = String(status).toUpperCase() as CourseRunStatus;
+
+    if (!Object.values(CourseRunStatus).includes(normalizedStatus)) {
+      throw new ApiValidationError('Invalid course run status');
+    }
+
+    return normalizedStatus;
+  }
+
+  private normalizeRecurrenceType(type: unknown): CourseRecurrenceType {
+    if (type === undefined || type === null || type === '') {
+      return CourseRecurrenceType.CONTINUOUS;
+    }
+
+    const normalizedType = String(type).toUpperCase() as CourseRecurrenceType;
+
+    if (!Object.values(CourseRecurrenceType).includes(normalizedType)) {
+      throw new ApiValidationError('Invalid course recurrence type');
+    }
+
+    return normalizedType;
+  }
+
+  private toDateOnly(value: Date): string {
+    return value.toISOString().slice(0, 10);
+  }
+
+  private parseDateOnly(value: unknown): string | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const date = new Date(String(value));
+
+    if (Number.isNaN(date.getTime())) {
+      throw new ApiValidationError('Date values must be valid ISO dates');
+    }
+
+    return this.toDateOnly(date);
+  }
+
+  private dateFromDateOnly(value?: string | null): Date {
+    return value ? new Date(`${value}T00:00:00.000Z`) : new Date();
+  }
+
+  private courseStatusToRunStatus(status: CourseStatus): CourseRunStatus {
+    if (status === CourseStatus.PUBLISHED) {
+      return CourseRunStatus.PUBLISHED;
+    }
+
+    if (status === CourseStatus.ARCHIVED) {
+      return CourseRunStatus.ARCHIVED;
+    }
+
+    return CourseRunStatus.DRAFT;
+  }
+
+  private calculateSemesterRun(startDate: Date): {
+    label: string;
+    startDate: string;
+    endDate: string;
+  } {
+    const year = startDate.getUTCFullYear();
+    const month = startDate.getUTCMonth() + 1;
+
+    if (month >= 4 && month <= 9) {
+      return {
+        label: `Sommersemester ${year}`,
+        startDate: `${year}-04-01`,
+        endDate: `${year}-09-30`,
+      };
+    }
+
+    const winterStartYear = month <= 3 ? year - 1 : year;
+    const winterEndYear = winterStartYear + 1;
+
+    return {
+      label: `Wintersemester ${winterStartYear}/${String(winterEndYear).slice(2)}`,
+      startDate: `${winterStartYear}-10-01`,
+      endDate: `${winterEndYear}-03-31`,
+    };
+  }
+
+  private calculateYearlyRun(startDate: Date): {
+    label: string;
+    startDate: string;
+    endDate: string;
+  } {
+    const year = startDate.getUTCFullYear();
+
+    return {
+      label: String(year),
+      startDate: `${year}-01-01`,
+      endDate: `${year}-12-31`,
+    };
+  }
+
+  private calculateInitialRunFields(
+    recurrenceType: CourseRecurrenceType,
+    input: Record<string, unknown>,
+  ): {
+    label: string;
+    startDate?: string;
+    endDate?: string;
+  } {
+    const explicitLabel = this.normalizeOptionalText(
+      input.initialRunLabel ?? input.runLabel ?? input.semester,
+    );
+    const parsedStartDate = this.parseDateOnly(
+      input.initialStartDate ?? input.startDate,
+    );
+    const startDate = this.dateFromDateOnly(parsedStartDate);
+    const explicitEndDate = this.parseDateOnly(input.initialEndDate ?? input.endDate);
+
+    if (recurrenceType === CourseRecurrenceType.SEMESTER) {
+      const calculated = this.calculateSemesterRun(startDate);
+
+      return {
+        ...calculated,
+        label: explicitLabel ?? calculated.label,
+        endDate: explicitEndDate ?? calculated.endDate,
+      };
+    }
+
+    if (recurrenceType === CourseRecurrenceType.YEARLY) {
+      const calculated = this.calculateYearlyRun(startDate);
+
+      return {
+        ...calculated,
+        label: explicitLabel ?? calculated.label,
+        endDate: explicitEndDate ?? calculated.endDate,
+      };
+    }
+
+    return {
+      label: explicitLabel ?? 'Fortlaufend',
+      startDate: parsedStartDate,
+      endDate: explicitEndDate,
+    };
+  }
+
+  private calculateNextRunFields(
+    course: Course,
+    previousRun: CourseRun,
+    body: CreateCourseRunDto = {},
+  ): {
+    label: string;
+    startDate?: string;
+    endDate?: string;
+  } {
+    const explicitLabel = this.normalizeOptionalText(body.label);
+    const explicitStartDate = this.parseDateOnly(body.startDate);
+    const explicitEndDate = this.parseDateOnly(body.endDate);
+    const recurrenceType = course.recurrenceType ?? CourseRecurrenceType.CONTINUOUS;
+
+    if (recurrenceType === CourseRecurrenceType.CONTINUOUS) {
+      if (!explicitLabel) {
+        throw new ApiValidationError(
+          'Continuous courses require an explicit label for a manual new run',
+        );
+      }
+
+      return {
+        label: explicitLabel,
+        startDate: explicitStartDate,
+        endDate: explicitEndDate,
+      };
+    }
+
+    const previousStart = this.dateFromDateOnly(previousRun.startDate);
+    const month = previousStart.getUTCMonth() + 1;
+    let nextStart: Date;
+
+    if (recurrenceType === CourseRecurrenceType.SEMESTER) {
+      const year = previousStart.getUTCFullYear();
+      nextStart = month >= 4 && month <= 9
+        ? new Date(Date.UTC(year, 9, 1))
+        : new Date(Date.UTC(month <= 3 ? year : year + 1, 3, 1));
+      const calculated = this.calculateSemesterRun(
+        explicitStartDate ? this.dateFromDateOnly(explicitStartDate) : nextStart,
+      );
+
+      return {
+        ...calculated,
+        label: explicitLabel ?? calculated.label,
+        endDate: explicitEndDate ?? calculated.endDate,
+      };
+    }
+
+    nextStart = new Date(Date.UTC(previousStart.getUTCFullYear() + 1, 0, 1));
+    const calculated = this.calculateYearlyRun(
+      explicitStartDate ? this.dateFromDateOnly(explicitStartDate) : nextStart,
+    );
+
+    return {
+      ...calculated,
+      label: explicitLabel ?? calculated.label,
+      endDate: explicitEndDate ?? calculated.endDate,
+    };
+  }
+
+  private calculatePlannedNextRunFields(
+    course: Course,
+    currentRun: CourseRun,
+  ): {
+    label: string;
+    startDate?: string;
+    endDate?: string;
+  } | null {
+    if ((course.recurrenceType ?? CourseRecurrenceType.CONTINUOUS) === CourseRecurrenceType.CONTINUOUS) {
+      return null;
+    }
+
+    return this.calculateNextRunFields(course, currentRun);
+  }
+
+  private calculateSpecialRunFields(
+    body: CreateCourseRunDto,
+  ): {
+    label: string;
+    startDate?: string;
+    endDate?: string;
+  } {
+    const label = this.normalizeOptionalText(body.label);
+
+    if (!label) {
+      throw new ApiValidationError(
+        'Ein Sonderdurchlauf benötigt eine eindeutige Bezeichnung.',
+      );
+    }
+
+    return {
+      label,
+      startDate: this.parseDateOnly(body.startDate),
+      endDate: this.parseDateOnly(body.endDate),
+    };
+  }
+
+  private normalizeCourseRunTemplateStrategy(
+    value: unknown,
+  ): CourseRunTemplateStrategy {
+    if (value === undefined || value === null || value === '') {
+      return CourseRunTemplateStrategy.ACTIVE_VERSION_OF_CURRENT_RUN;
+    }
+
+    const normalized = String(value).toUpperCase() as CourseRunTemplateStrategy;
+
+    if (!Object.values(CourseRunTemplateStrategy).includes(normalized)) {
+      throw new ApiValidationError('Invalid course run template strategy');
+    }
+
+    return normalized;
   }
 
   private normalizeCourseRole(role: string): CourseMemberRole {
@@ -455,6 +780,262 @@ export class CoursesService {
     }
   }
 
+  private normalizeMaterialReleaseMode(mode: unknown): LearningMaterialReleaseMode {
+    if (mode === undefined || mode === null || mode === '') {
+      return LearningMaterialReleaseMode.IMMEDIATE;
+    }
+
+    const normalizedMode = String(mode).toUpperCase() as LearningMaterialReleaseMode;
+
+    if (!Object.values(LearningMaterialReleaseMode).includes(normalizedMode)) {
+      throw new ApiValidationError('Invalid material release mode');
+    }
+
+    return normalizedMode;
+  }
+
+  private hasProvidedValue(value: unknown): boolean {
+    return value !== undefined && value !== null && value !== '';
+  }
+
+  private hasOwnInputField(input: Record<string, unknown>, field: string): boolean {
+    return Object.prototype.hasOwnProperty.call(input, field);
+  }
+
+  private parseReleaseDate(value: unknown): Date | null {
+    if (!this.hasProvidedValue(value)) {
+      return null;
+    }
+
+    const parsedDate = value instanceof Date ? value : new Date(String(value));
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      throw new ApiValidationError('Release date must be a valid date-time');
+    }
+
+    return parsedDate;
+  }
+
+  private async applyLearningMaterialReleaseConfiguration(
+    material: LearningMaterial,
+    input: Record<string, unknown>,
+    forceDefault = false,
+  ): Promise<void> {
+    const modeProvided = this.hasOwnInputField(input, 'releaseMode');
+    const releaseAtProvided = this.hasOwnInputField(input, 'releaseAt');
+    const releaseAfterTaskProvided = this.hasOwnInputField(input, 'releaseAfterTaskId');
+    const hasReleaseChange =
+      forceDefault || modeProvided || releaseAtProvided || releaseAfterTaskProvided;
+
+    if (!hasReleaseChange) {
+      return;
+    }
+
+    const mode = modeProvided
+      ? this.normalizeMaterialReleaseMode(input.releaseMode)
+      : material.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE;
+    const releaseAt = releaseAtProvided
+      ? this.parseReleaseDate(input.releaseAt)
+      : material.releaseAt ?? null;
+    const releaseAfterTaskId = releaseAfterTaskProvided
+      ? this.hasProvidedValue(input.releaseAfterTaskId)
+        ? String(input.releaseAfterTaskId)
+        : null
+      : material.releaseAfterTaskId ?? null;
+
+    if (mode === LearningMaterialReleaseMode.IMMEDIATE) {
+      if (
+        (!modeProvided || releaseAtProvided) &&
+        releaseAtProvided &&
+        this.hasProvidedValue(input.releaseAt)
+      ) {
+        throw new ApiValidationError('Immediate materials cannot define a release date');
+      }
+
+      if (
+        (!modeProvided || releaseAfterTaskProvided) &&
+        releaseAfterTaskProvided &&
+        this.hasProvidedValue(input.releaseAfterTaskId)
+      ) {
+        throw new ApiValidationError('Immediate materials cannot define a release task');
+      }
+
+      material.releaseMode = mode;
+      material.releaseAt = null;
+      material.releaseAfterTaskId = null;
+      return;
+    }
+
+    if (mode === LearningMaterialReleaseMode.SCHEDULED) {
+      if (releaseAfterTaskProvided && this.hasProvidedValue(input.releaseAfterTaskId)) {
+        throw new ApiValidationError('Scheduled materials cannot define a release task');
+      }
+
+      if (!releaseAt) {
+        throw new ApiValidationError('Scheduled materials require a release date');
+      }
+
+      material.releaseMode = mode;
+      material.releaseAt = releaseAt;
+      material.releaseAfterTaskId = null;
+      return;
+    }
+
+    if (releaseAtProvided && this.hasProvidedValue(input.releaseAt)) {
+      throw new ApiValidationError('Task-based materials cannot define a release date');
+    }
+
+    if (!releaseAfterTaskId) {
+      throw new ApiValidationError('Task-based materials require a release task');
+    }
+
+    const releaseTask = await this.taskRepository.findOne({
+      where: {
+        id: releaseAfterTaskId,
+        courseId: material.courseId,
+        courseRunId: material.courseRunId,
+        ...(material.courseVersionId ? { courseVersionId: material.courseVersionId } : {}),
+      },
+    });
+
+    if (!releaseTask) {
+      throw new ApiValidationError(
+        'Release task must belong to the same content version as the material',
+      );
+    }
+
+    material.releaseMode = mode;
+    material.releaseAt = null;
+    material.releaseAfterTaskId = releaseTask.id;
+  }
+
+  private async buildLearningMaterialVisibility(
+    material: LearningMaterial,
+    actorUserId?: string | number,
+    role?: CourseMemberRole,
+  ): Promise<LearningMaterialVisibility> {
+    const releaseMode = material.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE;
+    const releaseAfterTaskTitle = material.releaseAfterTaskId
+      ? (await this.taskRepository.findOne({
+        where: {
+          id: material.releaseAfterTaskId,
+        },
+      }))?.title
+      : undefined;
+    const isPublished =
+      material.publicationStatus === LearningMaterialPublicationStatus.PUBLISHED;
+
+    if (!isPublished) {
+      return {
+        visible: false,
+        locked: false,
+        releaseAfterTaskTitle,
+        visibleForStudents: false,
+      };
+    }
+
+    if (releaseMode === LearningMaterialReleaseMode.IMMEDIATE) {
+      return {
+        visible: true,
+        locked: false,
+        releaseAfterTaskTitle,
+        visibleForStudents: true,
+      };
+    }
+
+    if (releaseMode === LearningMaterialReleaseMode.SCHEDULED) {
+      const releaseAt = material.releaseAt;
+      const visible = Boolean(releaseAt && releaseAt.getTime() <= Date.now());
+
+      return {
+        visible,
+        locked: !visible,
+        lockedReason: visible
+          ? undefined
+          : `Wird sichtbar ab ${this.formatGermanDateTime(releaseAt)}`,
+        releaseAfterTaskTitle,
+        visibleForStudents: visible,
+      };
+    }
+
+    const conditionalVisibility: LearningMaterialVisibility = {
+      visible: false,
+      locked: true,
+      lockedReason: releaseAfterTaskTitle
+        ? `Wird sichtbar, sobald Aufgabe "${releaseAfterTaskTitle}" erfolgreich abgeschlossen wurde.`
+        : 'Wird sichtbar, sobald die vorausgesetzte Aufgabe erfolgreich abgeschlossen wurde.',
+      releaseAfterTaskTitle,
+      visibleForStudents: false,
+    };
+
+    if (
+      !actorUserId ||
+      !role ||
+      hasCoursePermission(role, CoursePermission.ManageCourseContent)
+    ) {
+      return {
+        ...conditionalVisibility,
+        locked: false,
+      };
+    }
+
+    const enrollment = await this.findCourseEnrollment(
+      material.courseId,
+      actorUserId,
+      material.courseRunId,
+    );
+
+    if (!enrollment || enrollment.role !== CourseMemberRole.STUDENT) {
+      return conditionalVisibility;
+    }
+
+    const progress = material.releaseAfterTaskId
+      ? await this.taskProgressRepository.findOne({
+        where: {
+          enrollmentId: enrollment.id,
+          taskId: material.releaseAfterTaskId,
+        },
+      })
+      : null;
+    const visible =
+      progress?.status === TaskProgressStatus.COMPLETED &&
+      progress.resultPassed === true;
+
+    return {
+      ...conditionalVisibility,
+      visible,
+      locked: !visible,
+      lockedReason: visible ? undefined : conditionalVisibility.lockedReason,
+      visibleForStudents: visible,
+    };
+  }
+
+  private async mapLearningMaterialForActor(
+    material: LearningMaterial,
+    actorUserId?: string | number,
+    role?: CourseMemberRole,
+  ): Promise<LearningMaterialResponseDto> {
+    const visibility = await this.buildLearningMaterialVisibility(
+      material,
+      actorUserId,
+      role,
+    );
+
+    return mapLearningMaterialToDto(material, visibility);
+  }
+
+  private formatGermanDateTime(value?: Date | null): string {
+    if (!value) {
+      return 'dem geplanten Zeitpunkt';
+    }
+
+    return new Intl.DateTimeFormat('de-DE', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: 'Europe/Berlin',
+    }).format(value);
+  }
+
   private async findLearningMaterialOrThrow(
     materialId: string,
   ): Promise<LearningMaterial> {
@@ -470,6 +1051,58 @@ export class CoursesService {
     }
 
     return material;
+  }
+
+  private async findCurrentCourseRun(courseId: string | number): Promise<CourseRun | null> {
+    return this.courseRunRepository.findOne({
+      where: {
+        courseId: this.toCourseId(courseId),
+        isActive: true,
+      },
+    });
+  }
+
+  private async createInitialCourseRun(
+    course: Course,
+    actorId: string | undefined,
+    input: Record<string, unknown> = {},
+  ): Promise<CourseRun> {
+    const fields = this.calculateInitialRunFields(
+      course.recurrenceType ?? CourseRecurrenceType.CONTINUOUS,
+      input,
+    );
+    const run = new CourseRun();
+    run.courseId = course.id;
+    run.course = course;
+    run.label = fields.label;
+    run.startDate = fields.startDate;
+    run.endDate = fields.endDate;
+    run.status = this.courseStatusToRunStatus(course.status);
+    run.isActive = true;
+    run.createdBy = actorId;
+
+    return this.courseRunRepository.save(run);
+  }
+
+  private async getCurrentCourseRunOrCreate(
+    courseId: string | number,
+  ): Promise<CourseRun> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const currentRun = await this.findCurrentCourseRun(normalizedCourseId);
+
+    if (currentRun) {
+      return currentRun;
+    }
+
+    const course = await this.findCourseOrThrow(normalizedCourseId);
+
+    return this.createInitialCourseRun(
+      course,
+      course.created_by ?? course.updated_by,
+      {
+        initialRunLabel: course.semester,
+      },
+    );
   }
 
   private async assertLearningMaterialReadable(
@@ -492,6 +1125,21 @@ export class CoursesService {
       );
     }
 
+    if (!hasCoursePermission(role, CoursePermission.ManageCourseContent)) {
+      const { run: currentRun, version } =
+        await this.getActiveCourseVersionForCurrentRunOrThrow(material.courseId);
+
+      if (
+        material.courseRunId !== currentRun.id ||
+        material.courseVersionId !== version.id
+      ) {
+        throw new ApiForbiddenError(
+          'Learning material is not available in the active content version',
+          'MATERIAL_ACCESS_DENIED',
+        );
+      }
+    }
+
     return role;
   }
 
@@ -509,13 +1157,1095 @@ export class CoursesService {
   private async findCourseEnrollment(
     courseId: string,
     userId: string | number,
+    courseRunId?: string,
   ): Promise<Enrollment | null> {
+    const resolvedRunId =
+      courseRunId ?? (await this.findCurrentCourseRun(courseId))?.id;
+
     return this.enrollmentRepository.findOne({
       where: {
         courseId,
+        ...(resolvedRunId ? { courseRunId: resolvedRunId } : {}),
         userId: this.toUserId(userId),
       },
     });
+  }
+
+  private normalizeChangeSummary(value: unknown): string | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+
+    const summary = String(value).trim();
+
+    return summary.length > 0 ? summary : undefined;
+  }
+
+  private async buildCourseVersionContent(
+    course: Course,
+    courseRun: CourseRun,
+    courseVersion?: CourseVersion,
+  ): Promise<Record<string, unknown>> {
+    const materialWhere = {
+      courseId: course.id,
+      courseRunId: courseRun.id,
+      ...(courseVersion ? { courseVersionId: courseVersion.id } : {}),
+      publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+    };
+    const taskWhere = {
+      courseId: course.id,
+      courseRunId: courseRun.id,
+      ...(courseVersion ? { courseVersionId: courseVersion.id } : {}),
+    };
+    const [materials, tasks] = await Promise.all([
+      this.learningMaterialRepository.find({
+        where: materialWhere,
+        order: {
+          sortOrder: 'ASC',
+          createdAt: 'ASC',
+        },
+      }),
+      this.taskRepository.find({
+        where: taskWhere,
+        order: {
+          order: 'ASC',
+        },
+      }),
+    ]);
+
+    return {
+      course: {
+        id: course.id,
+        externalId: course.external_id,
+        title: course.title,
+        description: course.description,
+        semester: course.semester,
+        status: course.status,
+        location: course.location,
+        ownerId: course.owner_id,
+        updatedAt: course.updated_at instanceof Date ? course.updated_at.toISOString() : undefined,
+      },
+      courseRun: {
+        id: courseRun.id,
+        label: courseRun.label,
+        startDate: courseRun.startDate,
+        endDate: courseRun.endDate,
+        status: courseRun.status,
+        isActive: courseRun.isActive,
+      },
+      courseVersion: courseVersion
+        ? {
+          id: courseVersion.id,
+          versionNumber: courseVersion.version_number,
+          label: courseVersion.label,
+          changeSummary: courseVersion.change_summary,
+          status: courseVersion.status,
+          isActive: courseVersion.is_active,
+          sourceVersionId: courseVersion.sourceVersionId,
+        }
+        : undefined,
+      learningMaterials: materials.map((material) => ({
+        id: material.id,
+        courseVersionId: material.courseVersionId,
+        title: material.title,
+        description: material.description,
+        type: material.type,
+        url: material.url,
+        content: material.content,
+        originalFileName: material.originalFileName,
+        storageKey: material.storageKey,
+        mimeType: material.mimeType,
+        fileSize: material.fileSize,
+        previewMetadata: material.previewMetadata,
+        tags: material.tags ?? [],
+        sortOrder: material.sortOrder,
+        publicationStatus: material.publicationStatus,
+        isPublished: material.isPublished,
+        releaseMode: material.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE,
+        releaseAt: material.releaseAt instanceof Date
+          ? material.releaseAt.toISOString()
+          : undefined,
+        releaseAfterTaskId: material.releaseAfterTaskId,
+        publishedAt: material.publishedAt instanceof Date
+          ? material.publishedAt.toISOString()
+          : undefined,
+        filePath: material.filePath,
+      })),
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        courseVersionId: task.courseVersionId,
+        title: task.title,
+        description: task.description,
+        type: task.type,
+        order: task.order,
+        unlockMode: task.unlockMode,
+        prerequisiteTaskId: task.prerequisiteTaskId,
+        completionCriteria: task.completionCriteria ?? {},
+        isPublished: task.isPublished,
+        demoKey: task.demoKey,
+      })),
+    };
+  }
+
+  private async getNextCourseVersionNumber(courseRunId: string): Promise<number> {
+    const versions = await this.courseVersionRepository.find({
+      where: {
+        course_run_id: courseRunId,
+      },
+      order: {
+        version_number: 'DESC',
+      },
+    });
+
+    return (versions[0]?.version_number ?? 0) + 1;
+  }
+
+  private async findActiveOrLatestCourseVersionForRun(
+    courseId: string,
+    runId: string,
+  ): Promise<CourseVersion | null> {
+    const versions = await this.courseVersionRepository.find({
+      where: {
+        course_id: courseId,
+        course_run_id: runId,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+      order: {
+        version_number: 'DESC',
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+
+    return versions.find((version) => version.is_active) ?? versions[0] ?? null;
+  }
+
+  private async attachLegacyRunContentToVersion(
+    courseId: string,
+    runId: string,
+    versionId: string,
+  ): Promise<void> {
+    const [legacyMaterials, legacyTasks] = await Promise.all([
+      this.learningMaterialRepository.find({
+        where: {
+          courseId,
+          courseRunId: runId,
+          courseVersionId: IsNull(),
+          publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        },
+      }),
+      this.taskRepository.find({
+        where: {
+          courseId,
+          courseRunId: runId,
+          courseVersionId: IsNull(),
+        },
+      }),
+    ]);
+
+    legacyMaterials.forEach((material) => {
+      material.courseVersionId = versionId;
+    });
+    legacyTasks.forEach((task) => {
+      task.courseVersionId = versionId;
+    });
+
+    await Promise.all([
+      legacyMaterials.length > 0
+        ? this.learningMaterialRepository.save(legacyMaterials)
+        : Promise.resolve([]),
+      legacyTasks.length > 0
+        ? this.taskRepository.save(legacyTasks)
+        : Promise.resolve([]),
+    ]);
+  }
+
+  private async getActiveCourseVersionForRunOrThrow(
+    courseId: string,
+    runId: string,
+  ): Promise<CourseVersion> {
+    const version = await this.findActiveOrLatestCourseVersionForRun(courseId, runId);
+
+    if (version) {
+      await this.attachLegacyRunContentToVersion(courseId, runId, version.id);
+      await this.refreshCourseVersionContent(version.id);
+
+      if (!version.is_active) {
+        return this.setActiveCourseVersion(courseId, version.id);
+      }
+
+      return version;
+    }
+
+    const course = await this.findCourseOrThrow(courseId);
+    const run = await this.courseRunRepository.findOne({
+      where: {
+        id: runId,
+        courseId,
+      },
+    });
+
+    if (!run) {
+      throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
+    }
+
+    const createdVersion = await this.createInitialContentVersionForRun(
+      course,
+      run,
+      course.created_by ?? run.createdBy ?? 'system',
+      `Initiale Inhaltsversion fuer ${run.label}`,
+    );
+
+    await this.attachLegacyRunContentToVersion(course.id, run.id, createdVersion.id);
+    await this.refreshCourseVersionContent(createdVersion.id);
+
+    const reloadedVersion = await this.courseVersionRepository.findOne({
+      where: {
+        id: createdVersion.id,
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+
+    return reloadedVersion ?? createdVersion;
+  }
+
+  private async getActiveCourseVersionForCurrentRunOrThrow(
+    courseId: string,
+  ): Promise<{ run: CourseRun; version: CourseVersion }> {
+    const run = await this.getCurrentCourseRunOrCreate(courseId);
+    const version = await this.getActiveCourseVersionForRunOrThrow(courseId, run.id);
+
+    return { run, version };
+  }
+
+  private async findCourseVersionInRunOrThrow(
+    courseId: string,
+    runId: string,
+    versionId: string,
+  ): Promise<CourseVersion> {
+    const version = await this.courseVersionRepository.findOne({
+      where: {
+        id: versionId,
+        course_id: courseId,
+        course_run_id: runId,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+
+    if (!version) {
+      throw new ApiNotFoundError('Course version not found', 'COURSE_NOT_FOUND');
+    }
+
+    return version;
+  }
+
+  private async refreshCourseVersionContent(versionId?: string | null): Promise<void> {
+    if (!versionId) {
+      return;
+    }
+
+    const version = await this.courseVersionRepository.findOne({
+      where: { id: versionId },
+      relations: ['courseRun'],
+    });
+
+    if (!version || !version.course_run_id) {
+      return;
+    }
+
+    const course = await this.findCourseOrThrow(version.course_id);
+    const run = version.courseRun ?? await this.courseRunRepository.findOne({
+      where: {
+        id: version.course_run_id,
+        courseId: version.course_id,
+      },
+    });
+
+    if (!run) {
+      return;
+    }
+
+    version.content = await this.buildCourseVersionContent(course, run, version);
+    await this.courseVersionRepository.save(version);
+  }
+
+  private async findCourseVersionTemplateOrThrow(
+    courseId: string,
+    sourceVersionId: string,
+  ): Promise<CourseVersion> {
+    const sourceVersion = await this.courseVersionRepository.findOne({
+      where: {
+        id: sourceVersionId,
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+
+    if (!sourceVersion || sourceVersion.status === CourseVersionStatus.ARCHIVED) {
+      throw new ApiNotFoundError('Course version template not found', 'COURSE_NOT_FOUND');
+    }
+
+    if (sourceVersion.course_id !== courseId) {
+      throw new ApiValidationError(
+        'Die ausgewählte Inhaltsvorlage gehört nicht zu diesem Kurs.',
+      );
+    }
+
+    if (!sourceVersion.course_run_id) {
+      throw new ApiValidationError(
+        'Die ausgewählte Inhaltsvorlage gehört zu keinem Kursdurchlauf.',
+      );
+    }
+
+    return sourceVersion;
+  }
+
+  private async resolveCourseRunTemplateVersion(
+    course: Course,
+    currentRun: CourseRun,
+    sourceVersionId?: string | null,
+  ): Promise<CourseVersion | null> {
+    if (sourceVersionId) {
+      return this.findCourseVersionTemplateOrThrow(course.id, sourceVersionId);
+    }
+
+    const strategy = this.normalizeCourseRunTemplateStrategy(
+      course.contentTemplateStrategy,
+    );
+
+    if (strategy === CourseRunTemplateStrategy.EMPTY) {
+      return null;
+    }
+
+    if (
+      strategy === CourseRunTemplateStrategy.SPECIFIC_VERSION &&
+      course.plannedSourceVersionId
+    ) {
+      return this.findCourseVersionTemplateOrThrow(
+        course.id,
+        course.plannedSourceVersionId,
+      );
+    }
+
+    return this.getActiveCourseVersionForRunOrThrow(course.id, currentRun.id);
+  }
+
+  private async assertPlannedRunDoesNotExist(
+    courseId: string,
+    fields: {
+      label: string;
+      startDate?: string;
+      endDate?: string;
+    },
+  ): Promise<void> {
+    const existingRuns = await this.courseRunRepository.find({
+      where: {
+        courseId,
+      },
+    });
+    const duplicate = existingRuns.find((run) =>
+      run.label === fields.label &&
+      (run.startDate ?? null) === (fields.startDate ?? null) &&
+      (run.endDate ?? null) === (fields.endDate ?? null),
+    );
+
+    if (duplicate) {
+      throw new ApiValidationError(
+        'Der nächste geplante Kursdurchlauf wurde bereits vorbereitet.',
+      );
+    }
+  }
+
+  private async hydrateCourseVersionTemplateInfo(
+    version: CourseVersion,
+  ): Promise<CourseVersion> {
+    if (version.courseRun && (!version.sourceVersionId || version.sourceVersion)) {
+      return version;
+    }
+
+    if (!version.courseRun && version.course_run_id) {
+      version.courseRun = await this.courseRunRepository.findOne({
+        where: {
+          id: version.course_run_id,
+        },
+      }) ?? undefined;
+    }
+
+    if (version.sourceVersionId && !version.sourceVersion) {
+      const sourceVersion = await this.courseVersionRepository.findOne({
+        where: {
+          id: version.sourceVersionId,
+        },
+        relations: ['courseRun'],
+      });
+      version.sourceVersion = sourceVersion ?? null;
+    }
+
+    if (version.sourceVersion && !version.sourceVersion.courseRun && version.sourceVersion.course_run_id) {
+      version.sourceVersion.courseRun = await this.courseRunRepository.findOne({
+        where: {
+          id: version.sourceVersion.course_run_id,
+        },
+      }) ?? undefined;
+    }
+
+    return version;
+  }
+
+  private async mapCourseVersionWithTemplateInfo(
+    version: CourseVersion,
+  ): Promise<CourseVersionResponseDto> {
+    return mapCourseVersionToDto(
+      await this.hydrateCourseVersionTemplateInfo(version),
+    );
+  }
+
+  private getSnapshotTasks(version: CourseVersion): CourseVersionSnapshotTask[] {
+    const tasks = (version.content ?? {}).tasks;
+
+    return Array.isArray(tasks) ? tasks as CourseVersionSnapshotTask[] : [];
+  }
+
+  private getSnapshotMaterials(version: CourseVersion): CourseVersionSnapshotMaterial[] {
+    const materials = (version.content ?? {}).learningMaterials;
+
+    return Array.isArray(materials)
+      ? materials as CourseVersionSnapshotMaterial[]
+      : [];
+  }
+
+  private hasCourseVersionContentSnapshot(version: CourseVersion): boolean {
+    return (
+      Array.isArray((version.content ?? {}).tasks) &&
+      Array.isArray((version.content ?? {}).learningMaterials)
+    );
+  }
+
+  private async assertCourseVersionReadable(
+    courseId: string | number,
+    actorUserId?: string | number,
+  ): Promise<void> {
+    await this.assertCoursePermission(
+      courseId,
+      actorUserId,
+      CoursePermission.ManageCourseContent,
+    );
+  }
+
+  private async setActiveCourseVersion(
+    courseId: string,
+    versionId: string,
+  ): Promise<CourseVersion> {
+    const version = await this.courseVersionRepository.findOne({
+      where: {
+        id: versionId,
+        course_id: courseId,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+    });
+
+    if (!version) {
+      throw new ApiNotFoundError('Course version not found', 'COURSE_NOT_FOUND');
+    }
+
+    const versions = await this.courseVersionRepository.find({
+      where: {
+        course_id: courseId,
+        course_run_id: version.course_run_id,
+      },
+    });
+
+    versions.forEach((candidate) => {
+      candidate.is_active = false;
+    });
+    await this.courseVersionRepository.save(versions);
+    version.is_active = true;
+
+    const savedVersion = await this.courseVersionRepository.save(version);
+    await this.refreshCourseVersionContent(savedVersion.id);
+
+    return savedVersion;
+  }
+
+  private async mapCourseRunWithCounts(run: CourseRun): Promise<CourseRunResponseDto> {
+    const activeVersion = await this.getActiveCourseVersionForRunOrThrow(
+      run.courseId,
+      run.id,
+    );
+    const [enrollments, materials, tasks, versions, results, assignments] = await Promise.all([
+      this.enrollmentRepository.find({ where: { courseRunId: run.id } }),
+      this.learningMaterialRepository.find({
+        where: {
+          courseRunId: run.id,
+          courseVersionId: activeVersion.id,
+          publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        },
+      }),
+      this.taskRepository.find({
+        where: {
+          courseRunId: run.id,
+          courseVersionId: activeVersion.id,
+        },
+      }),
+      this.courseVersionRepository.find({
+        where: {
+          course_run_id: run.id,
+          status: Not(CourseVersionStatus.ARCHIVED),
+        },
+      }),
+      this.courseResultRepository.find({ where: { courseRunId: run.id } }),
+      this.assignmentRepository.find({ where: { courseRunId: run.id } }),
+    ]);
+    const progressRecords = tasks.length > 0
+      ? await this.taskProgressRepository.find({
+        where: {
+          taskId: In(tasks.map((task) => task.id)),
+        },
+      })
+      : [];
+
+    return mapCourseRunToDto(run, {
+      enrollmentCount: enrollments.length,
+      materialCount: materials.length,
+      taskCount: tasks.length,
+      versionCount: versions.length,
+      resultCount: results.length,
+      progressCount: progressRecords.length,
+      assignmentCount: assignments.length,
+    });
+  }
+
+  private async assertCourseRunReadable(
+    courseId: string,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseMemberRole | null> {
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.courseRunRepository.findOne({
+      where: {
+        id: runId,
+        courseId,
+      },
+    });
+
+    if (!run) {
+      throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
+    }
+
+    const activeRole = await this.resolveCourseRole(courseId, actorId);
+
+    if (hasCoursePermission(activeRole, CoursePermission.ManageCourseContent)) {
+      return activeRole;
+    }
+
+    if (!run.isActive) {
+      throw new ApiForbiddenError(
+        'You do not have permission to access historical course runs',
+        'COURSE_ACCESS_DENIED',
+      );
+    }
+
+    const enrollment = await this.findCourseEnrollment(courseId, actorId, runId);
+
+    if (!enrollment) {
+      throw new ApiForbiddenError(
+        'You do not have permission to access this course run',
+        'COURSE_ACCESS_DENIED',
+      );
+    }
+
+    return this.normalizeCourseRole(enrollment.role);
+  }
+
+  private async assertCourseRunManageable(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRun> {
+    const normalizedCourseId = this.toCourseId(courseId);
+
+    await this.assertCoursePermission(
+      normalizedCourseId,
+      actorUserId,
+      CoursePermission.ManageCourseContent,
+    );
+
+    const run = await this.courseRunRepository.findOne({
+      where: {
+        id: runId,
+        courseId: normalizedCourseId,
+      },
+    });
+
+    if (!run) {
+      throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
+    }
+
+    return run;
+  }
+
+  private async setActiveCourseRun(
+    courseId: string,
+    runId: string,
+  ): Promise<CourseRun> {
+    const run = await this.courseRunRepository.findOne({
+      where: {
+        id: runId,
+        courseId,
+      },
+    });
+
+    if (!run) {
+      throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
+    }
+
+    const runs = await this.courseRunRepository.find({
+      where: {
+        courseId,
+      },
+    });
+
+    runs.forEach((candidate) => {
+      candidate.isActive = false;
+    });
+    await this.courseRunRepository.save(runs);
+    run.isActive = true;
+
+    return this.courseRunRepository.save(run);
+  }
+
+  private async copyLearningMaterialsToRun(
+    sourceRunId: string,
+    targetRun: CourseRun,
+    actorId: string,
+    taskIdMap: Map<string, string> = new Map(),
+    targetVersion?: CourseVersion,
+    sourceVersionId?: string,
+  ): Promise<void> {
+    const materials = await this.learningMaterialRepository.find({
+      where: {
+        courseRunId: sourceRunId,
+        ...(sourceVersionId ? { courseVersionId: sourceVersionId } : {}),
+        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+      },
+      order: {
+        sortOrder: 'ASC',
+        createdAt: 'ASC',
+      },
+    });
+
+    for (const source of materials) {
+      const material = new LearningMaterial();
+      material.courseId = targetRun.courseId;
+      material.courseRunId = targetRun.id;
+      material.courseRun = targetRun;
+      material.courseVersionId = targetVersion?.id;
+      material.courseVersion = targetVersion;
+      material.title = source.title;
+      material.description = source.description;
+      material.content = source.content;
+      material.type = source.type;
+      material.url = source.url;
+      material.originalFileName = source.originalFileName;
+      material.storageKey = source.storageKey;
+      material.mimeType = source.mimeType;
+      material.fileSize = source.fileSize;
+      material.previewMetadata = source.previewMetadata;
+      material.tags = [...(source.tags ?? [])];
+      material.sortOrder = source.sortOrder;
+      material.publicationStatus = source.publicationStatus;
+      material.publishedAt = source.publishedAt;
+      material.releaseMode = source.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE;
+      material.releaseAt = source.releaseAt;
+      material.releaseAfterTaskId = source.releaseAfterTaskId
+        ? taskIdMap.get(source.releaseAfterTaskId)
+        : null;
+      material.filePath = source.filePath;
+      material.isPublished = source.isPublished;
+      material.createdBy = actorId;
+      material.updatedBy = actorId;
+      await this.learningMaterialRepository.save(material);
+    }
+  }
+
+  private async copyTasksToRun(
+    sourceRunId: string,
+    targetRun: CourseRun,
+    actorId: string,
+    targetVersion?: CourseVersion,
+    sourceVersionId?: string,
+  ): Promise<Map<string, string>> {
+    const sourceTasks = await this.taskRepository.find({
+      where: {
+        courseRunId: sourceRunId,
+        ...(sourceVersionId ? { courseVersionId: sourceVersionId } : {}),
+      },
+      order: {
+        order: 'ASC',
+      },
+    });
+    const taskIdMap = new Map<string, string>();
+
+    for (const source of sourceTasks) {
+      const task = new Task();
+      task.courseId = targetRun.courseId;
+      task.courseRunId = targetRun.id;
+      task.courseRun = targetRun;
+      task.courseVersionId = targetVersion?.id;
+      task.courseVersion = targetVersion;
+      task.title = source.title;
+      task.description = source.description;
+      task.type = source.type;
+      task.order = source.order;
+      task.unlockMode = source.unlockMode;
+      task.prerequisiteTaskId = undefined;
+      task.completionCriteria = source.completionCriteria;
+      task.isPublished = source.isPublished;
+      task.demoKey = source.demoKey;
+      task.createdBy = actorId;
+      task.updatedBy = actorId;
+      const savedTask = await this.taskRepository.save(task);
+      taskIdMap.set(source.id, savedTask.id);
+    }
+
+    for (const source of sourceTasks) {
+      if (!source.prerequisiteTaskId) {
+        continue;
+      }
+
+      const copiedTaskId = taskIdMap.get(source.id);
+      const copiedPrerequisiteId = taskIdMap.get(source.prerequisiteTaskId);
+
+      if (!copiedTaskId || !copiedPrerequisiteId) {
+        continue;
+      }
+
+      const copiedTask = await this.taskRepository.findOne({
+        where: {
+          id: copiedTaskId,
+        },
+      });
+
+      if (copiedTask) {
+        copiedTask.prerequisiteTaskId = copiedPrerequisiteId;
+        copiedTask.updatedBy = actorId;
+        await this.taskRepository.save(copiedTask);
+      }
+    }
+
+    return taskIdMap;
+  }
+
+  private cloneJsonValue<T>(value: T): T {
+    if (value === undefined || value === null) {
+      return value;
+    }
+
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  private normalizeSnapshotTaskUnlockMode(value: unknown): TaskUnlockMode {
+    const normalizedValue = String(value ?? TaskUnlockMode.IMMEDIATE).toUpperCase() as TaskUnlockMode;
+
+    return Object.values(TaskUnlockMode).includes(normalizedValue)
+      ? normalizedValue
+      : TaskUnlockMode.IMMEDIATE;
+  }
+
+  private normalizeSnapshotMaterialType(value: unknown): LearningMaterialType {
+    const normalizedValue = String(value ?? LearningMaterialType.OTHER_FILE).toUpperCase() as LearningMaterialType;
+
+    return Object.values(LearningMaterialType).includes(normalizedValue)
+      ? normalizedValue
+      : LearningMaterialType.OTHER_FILE;
+  }
+
+  private normalizeSnapshotPublicationStatus(
+    value: unknown,
+  ): LearningMaterialPublicationStatus {
+    const normalizedValue = String(
+      value ?? LearningMaterialPublicationStatus.DRAFT,
+    ).toUpperCase() as LearningMaterialPublicationStatus;
+
+    return Object.values(LearningMaterialPublicationStatus).includes(normalizedValue)
+      ? normalizedValue
+      : LearningMaterialPublicationStatus.DRAFT;
+  }
+
+  private normalizeSnapshotReleaseMode(value: unknown): LearningMaterialReleaseMode {
+    const normalizedValue = String(
+      value ?? LearningMaterialReleaseMode.IMMEDIATE,
+    ).toUpperCase() as LearningMaterialReleaseMode;
+
+    return Object.values(LearningMaterialReleaseMode).includes(normalizedValue)
+      ? normalizedValue
+      : LearningMaterialReleaseMode.IMMEDIATE;
+  }
+
+  private parseSnapshotDate(value?: string | Date | null): Date | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = new Date(value);
+
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private parseSnapshotFileSize(value?: number | string | null): number | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const parsedValue = Number(value);
+
+    return Number.isFinite(parsedValue) && parsedValue >= 0
+      ? parsedValue
+      : undefined;
+  }
+
+  private async copyTasksFromVersionSnapshot(
+    sourceVersion: CourseVersion,
+    targetRun: CourseRun,
+    actorId: string,
+    targetVersion: CourseVersion,
+  ): Promise<Map<string, string>> {
+    if (!this.hasCourseVersionContentSnapshot(sourceVersion)) {
+      if (!sourceVersion.course_run_id) {
+        return new Map();
+      }
+
+      return this.copyTasksToRun(
+        sourceVersion.course_run_id,
+        targetRun,
+        actorId,
+        targetVersion,
+        sourceVersion.id,
+      );
+    }
+
+    const sourceTasks = this.getSnapshotTasks(sourceVersion);
+    const taskIdMap = new Map<string, string>();
+    const copiedTasksBySourceId = new Map<string, Task>();
+
+    for (const source of sourceTasks) {
+      const task = new Task();
+      task.courseId = targetRun.courseId;
+      task.courseRunId = targetRun.id;
+      task.courseRun = targetRun;
+      task.courseVersionId = targetVersion.id;
+      task.courseVersion = targetVersion;
+      task.title = String(source.title ?? 'Unbenannte Aufgabe');
+      task.description = String(source.description ?? '');
+      task.type = String(source.type ?? 'TASK');
+      task.order = Number.isInteger(Number(source.order)) ? Number(source.order) : 0;
+      task.unlockMode = this.normalizeSnapshotTaskUnlockMode(source.unlockMode);
+      task.prerequisiteTaskId = undefined;
+      task.completionCriteria = this.cloneJsonValue(source.completionCriteria ?? {});
+      task.isPublished = source.isPublished === true;
+      task.demoKey = source.demoKey ?? undefined;
+      task.createdBy = actorId;
+      task.updatedBy = actorId;
+      const savedTask = await this.taskRepository.save(task);
+
+      if (source.id) {
+        taskIdMap.set(source.id, savedTask.id);
+        copiedTasksBySourceId.set(source.id, savedTask);
+      }
+    }
+
+    for (const source of sourceTasks) {
+      if (!source.id || !source.prerequisiteTaskId) {
+        continue;
+      }
+
+      const copiedTask = copiedTasksBySourceId.get(source.id);
+      const copiedPrerequisiteId = taskIdMap.get(source.prerequisiteTaskId);
+
+      if (!copiedTask || !copiedPrerequisiteId) {
+        throw new ApiValidationError(
+          'Eine Aufgabenabhängigkeit der ausgewählten Vorlage konnte nicht kopiert werden.',
+        );
+      }
+
+      copiedTask.prerequisiteTaskId = copiedPrerequisiteId;
+      copiedTask.updatedBy = actorId;
+      await this.taskRepository.save(copiedTask);
+    }
+
+    return taskIdMap;
+  }
+
+  private async copyLearningMaterialsFromVersionSnapshot(
+    sourceVersion: CourseVersion,
+    targetRun: CourseRun,
+    actorId: string,
+    taskIdMap: Map<string, string>,
+    targetVersion: CourseVersion,
+  ): Promise<void> {
+    if (!this.hasCourseVersionContentSnapshot(sourceVersion)) {
+      if (!sourceVersion.course_run_id) {
+        return;
+      }
+
+      await this.copyLearningMaterialsToRun(
+        sourceVersion.course_run_id,
+        targetRun,
+        actorId,
+        taskIdMap,
+        targetVersion,
+        sourceVersion.id,
+      );
+      return;
+    }
+
+    const sourceMaterials = this.getSnapshotMaterials(sourceVersion);
+
+    for (const source of sourceMaterials) {
+      const releaseMode = this.normalizeSnapshotReleaseMode(source.releaseMode);
+      const releaseAfterTaskId = source.releaseAfterTaskId
+        ? taskIdMap.get(source.releaseAfterTaskId)
+        : null;
+
+      if (
+        releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION &&
+        source.releaseAfterTaskId &&
+        !releaseAfterTaskId
+      ) {
+        throw new ApiValidationError(
+          'Eine Material-Freischaltregel der ausgewählten Vorlage konnte nicht kopiert werden.',
+        );
+      }
+
+      const material = new LearningMaterial();
+      material.courseId = targetRun.courseId;
+      material.courseRunId = targetRun.id;
+      material.courseRun = targetRun;
+      material.courseVersionId = targetVersion.id;
+      material.courseVersion = targetVersion;
+      material.title = String(source.title ?? 'Unbenanntes Material');
+      material.description = source.description;
+      material.content = source.content;
+      material.type = this.normalizeSnapshotMaterialType(source.type);
+      material.url = source.url;
+      material.originalFileName = source.originalFileName;
+      material.storageKey = source.storageKey;
+      material.mimeType = source.mimeType;
+      material.fileSize = this.parseSnapshotFileSize(source.fileSize);
+      material.previewMetadata = this.cloneJsonValue(source.previewMetadata);
+      material.tags = Array.isArray(source.tags) ? [...source.tags] : [];
+      material.sortOrder = Number.isInteger(Number(source.sortOrder))
+        ? Number(source.sortOrder)
+        : 0;
+      material.publicationStatus = this.normalizeSnapshotPublicationStatus(
+        source.publicationStatus,
+      );
+      material.publishedAt = this.parseSnapshotDate(source.publishedAt) ?? undefined;
+      material.releaseMode = releaseMode;
+      material.releaseAt = releaseMode === LearningMaterialReleaseMode.SCHEDULED
+        ? this.parseSnapshotDate(source.releaseAt)
+        : null;
+      material.releaseAfterTaskId = releaseMode === LearningMaterialReleaseMode.AFTER_TASK_COMPLETION
+        ? releaseAfterTaskId
+        : null;
+      material.filePath = source.filePath;
+      material.isPublished = source.isPublished === true;
+      material.createdBy = actorId;
+      material.updatedBy = actorId;
+      await this.learningMaterialRepository.save(material);
+    }
+  }
+
+  private async copyCourseVersionContentToRun(
+    sourceVersion: CourseVersion,
+    targetRun: CourseRun,
+    actorId: string,
+    targetVersion: CourseVersion,
+  ): Promise<void> {
+    if (sourceVersion.course_id !== targetRun.courseId) {
+      throw new ApiValidationError(
+        'Die ausgewählte Inhaltsvorlage gehört nicht zu diesem Kurs.',
+      );
+    }
+
+    const sourceHasSnapshot = this.hasCourseVersionContentSnapshot(sourceVersion);
+
+    if (!sourceHasSnapshot && sourceVersion.is_active && sourceVersion.course_run_id) {
+      await this.attachLegacyRunContentToVersion(
+        sourceVersion.course_id,
+        sourceVersion.course_run_id,
+        sourceVersion.id,
+      );
+    }
+
+    const [sourceMaterials, sourceTasks] = await Promise.all([
+      this.learningMaterialRepository.find({
+        where: {
+          courseVersionId: sourceVersion.id,
+          publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        },
+      }),
+      this.taskRepository.find({
+        where: {
+          courseVersionId: sourceVersion.id,
+        },
+      }),
+    ]);
+    let copySource = sourceVersion;
+
+    if (!sourceHasSnapshot && (sourceMaterials.length > 0 || sourceTasks.length > 0)) {
+      await this.refreshCourseVersionContent(sourceVersion.id);
+      copySource = await this.courseVersionRepository.findOne({
+        where: {
+          id: sourceVersion.id,
+        },
+        relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+      }) ?? sourceVersion;
+    }
+
+    const copiedTaskIds = await this.copyTasksFromVersionSnapshot(
+      copySource,
+      targetRun,
+      actorId,
+      targetVersion,
+    );
+    await this.copyLearningMaterialsFromVersionSnapshot(
+      copySource,
+      targetRun,
+      actorId,
+      copiedTaskIds,
+      targetVersion,
+    );
+  }
+
+  private async createInitialContentVersionForRun(
+    course: Course,
+    run: CourseRun,
+    actorId: string,
+    changeSummary: string,
+    sourceVersionId?: string | null,
+  ): Promise<CourseVersion> {
+    const version = new CourseVersion();
+    version.course_id = course.id;
+    version.course = course;
+    version.course_run_id = run.id;
+    version.courseRun = run;
+    version.version_number = 1;
+    version.label = 'Version 1';
+    version.content = {};
+    version.change_summary = changeSummary;
+    version.status = CourseVersionStatus.PUBLISHED;
+    version.sourceVersionId = sourceVersionId ?? null;
+    version.created_by = actorId;
+    version.is_active = true;
+
+    const savedVersion = await this.courseVersionRepository.save(version);
+    savedVersion.content = await this.buildCourseVersionContent(
+      course,
+      run,
+      savedVersion,
+    );
+
+    return this.courseVersionRepository.save(savedVersion);
   }
 
   private parseCourseResultNumber(
@@ -670,6 +2400,7 @@ export class CoursesService {
     enrollment: Enrollment,
   ): void {
     result.courseId = courseId;
+    result.courseRunId = enrollment.courseRunId;
     result.enrollmentId = enrollment.id;
     result.studentId = enrollment.userId;
 
@@ -733,7 +2464,11 @@ export class CoursesService {
     actorId: string,
   ): Promise<CourseResultResponseDto> {
     const assignments = await this.assignmentRepository.find({
-      where: { course: { id: courseId }, isGraded: true },
+      where: {
+        course: { id: courseId },
+        courseRunId: enrollment.courseRunId,
+        isGraded: true,
+      },
     });
     const grades = await this.gradeRepository.find({
       where: { enrollment: { id: enrollment.id } },
@@ -818,15 +2553,120 @@ export class CoursesService {
 
     const enrollments = await this.enrollmentRepository.find({
       where: { userId: this.toUserId(userId) },
-      relations: ['course'],
+      relations: ['course', 'courseRun'],
     });
 
     enrollments
+      .filter((enrollment) => enrollment.courseRun?.isActive === true)
       .map((enrollment) => enrollment.course)
       .filter(Boolean)
       .forEach((course) => coursesById.set(course.id, course));
 
     return Array.from(coursesById.values()).map(mapCourseToDto);
+  }
+
+  async getAvailableCourses(
+    actorUserId?: string | number,
+  ): Promise<CourseCatalogItemResponseDto[]> {
+    const actorId = this.requireActorUserId(actorUserId);
+    const courses = await this.coursesRepository.find({
+      where: {
+        status: CourseStatus.PUBLISHED,
+      },
+      order: {
+        title: 'ASC',
+      },
+    });
+    const enrollments = await this.enrollmentRepository.find({
+      where: {
+        userId: actorId,
+      },
+      relations: ['courseRun'],
+    });
+    const enrollmentByCourseId = new Map(
+      enrollments
+        .filter((enrollment) => enrollment.courseRun?.isActive)
+        .map((enrollment) => [enrollment.courseId, enrollment]),
+    );
+    const ownerId = this.toOptionalNumber(actorId);
+    const result: CourseCatalogItemResponseDto[] = [];
+
+    for (const course of courses) {
+      if (enrollmentByCourseId.has(course.id)) {
+        continue;
+      }
+
+      if (ownerId !== undefined && course.owner_id === ownerId) {
+        continue;
+      }
+
+      const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
+
+      result.push(mapCourseToCatalogItemDto(course, null, currentRun));
+    }
+
+    return result;
+  }
+
+  async getEnrolledCourses(
+    actorUserId?: string | number,
+  ): Promise<CourseCatalogItemResponseDto[]> {
+    const actorId = this.requireActorUserId(actorUserId);
+    const coursesById = new Map<string, CourseCatalogItemResponseDto>();
+    const enrollments = await this.enrollmentRepository.find({
+      where: {
+        userId: actorId,
+      },
+      relations: ['course', 'courseRun'],
+    });
+
+    enrollments
+      .filter((enrollment) => Boolean(enrollment.course))
+      .filter((enrollment) => enrollment.courseRun?.isActive === true)
+      .forEach((enrollment) => {
+        coursesById.set(
+          enrollment.course.id,
+          mapCourseToCatalogItemDto(
+            enrollment.course,
+            enrollment,
+            enrollment.courseRun,
+          ),
+        );
+      });
+
+    const ownerId = this.toOptionalNumber(actorId);
+
+    if (ownerId !== undefined) {
+      const ownedCourses = await this.coursesRepository.find({
+        where: {
+          owner_id: ownerId,
+        },
+        order: {
+          title: 'ASC',
+        },
+      });
+
+      for (const course of ownedCourses) {
+        if (!coursesById.has(course.id)) {
+          const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
+          const teacherEnrollment = new Enrollment();
+          teacherEnrollment.courseId = course.id;
+          teacherEnrollment.course = course;
+          teacherEnrollment.courseRunId = currentRun.id;
+          teacherEnrollment.courseRun = currentRun;
+          teacherEnrollment.userId = actorId;
+          teacherEnrollment.role = CourseMemberRole.TEACHER;
+          coursesById.set(
+            course.id,
+            mapCourseToCatalogItemDto(course, teacherEnrollment, currentRun),
+          );
+        }
+      }
+    }
+
+    return Array.from(coursesById.values()).sort((left, right) =>
+      left.title.localeCompare(right.title),
+    );
   }
 
   async findOne(id: string | number): Promise<CourseResponseDto> {
@@ -856,6 +2696,7 @@ export class CoursesService {
   ): Promise<CourseContextResponseDto> {
     const actorId = this.requireActorUserId(actorUserId);
     const course = await this.findCourseOrThrow(courseId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
     const role = await this.resolveCourseRole(courseId, actorId);
 
     if (!hasCoursePermission(role, CoursePermission.ReadCourseContent)) {
@@ -872,7 +2713,12 @@ export class CoursesService {
       );
     }
 
-    return mapCourseContextToDto(course, actorId, role);
+    const currentVersion = await this.getActiveCourseVersionForRunOrThrow(
+      course.id,
+      currentRun.id,
+    );
+
+    return mapCourseContextToDto(course, actorId, role, currentRun, currentVersion);
   }
 
   async getCourseMembers(
@@ -885,8 +2731,28 @@ export class CoursesService {
       CoursePermission.ManageMembers,
     );
 
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
     const enrollments = await this.enrollmentRepository.find({
-      where: { courseId: this.toCourseId(courseId) },
+      where: {
+        courseId: this.toCourseId(courseId),
+        courseRunId: currentRun.id,
+      },
+    });
+
+    return enrollments.map(mapEnrollmentToDto);
+  }
+
+  async getCourseMembersByRun(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<EnrollmentResponseDto[]> {
+    const run = await this.assertCourseRunManageable(courseId, runId, actorUserId);
+    const enrollments = await this.enrollmentRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+        courseRunId: run.id,
+      },
     });
 
     return enrollments.map(mapEnrollmentToDto);
@@ -904,12 +2770,16 @@ export class CoursesService {
       body.owner_id ?? body.ownerId ?? actorId ?? body.userId,
     );
     const status = this.normalizeCourseStatus(body.status);
+    const recurrenceType = this.normalizeRecurrenceType(
+      body.recurrenceType ?? body.recurrence_type,
+    );
 
     course.external_id =
       body.external_id ?? body.externalId ?? this.createExternalCourseId();
     course.title = this.requireCourseTitle(body.title);
     course.description = body.description;
     course.semester = body.semester;
+    course.recurrenceType = recurrenceType;
     course.status = status ?? CourseStatus.DRAFT;
     course.location = body.location;
     course.key_password = body.key_password ?? body.keyPassword;
@@ -918,17 +2788,27 @@ export class CoursesService {
     course.updated_by = actorId ?? ownerId?.toString();
 
     const savedCourse = await this.coursesRepository.save(course);
+    const initialRun = await this.createInitialCourseRun(savedCourse, actorId, body);
+    await this.createInitialContentVersionForRun(
+      savedCourse,
+      initialRun,
+      actorId ?? savedCourse.created_by ?? 'system',
+      `Initiale Inhaltsversion fuer ${initialRun.label}`,
+    );
 
     if (ownerId !== undefined) {
       const existingEnrollment = await this.findCourseEnrollment(
         savedCourse.id,
         ownerId,
+        initialRun.id,
       );
 
       if (!existingEnrollment) {
         const enrollment = new Enrollment();
         enrollment.courseId = savedCourse.id;
         enrollment.course = savedCourse;
+        enrollment.courseRunId = initialRun.id;
+        enrollment.courseRun = initialRun;
         enrollment.userId = this.toUserId(ownerId);
         enrollment.role = CourseMemberRole.TEACHER;
         enrollment.createdBy = actorId ?? this.toUserId(ownerId);
@@ -946,6 +2826,15 @@ export class CoursesService {
     userId: string | number,
     key?: string,
   ): Promise<EnrollmentResponseDto> {
+    return this.enrollInCourse(courseId, userId, key);
+  }
+
+  async enrollInCourse(
+    courseId: string | number,
+    actorUserId?: string | number,
+    key?: string,
+  ): Promise<EnrollmentResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
     const normalizedCourseId = this.toCourseId(courseId);
     const course = await this.coursesRepository.findOne({
       where: { id: normalizedCourseId },
@@ -955,28 +2844,62 @@ export class CoursesService {
       throw new ApiNotFoundError('Course not found');
     }
 
+    if (course.status !== CourseStatus.PUBLISHED) {
+      throw new ApiForbiddenError(
+        'Only published courses can be joined',
+        'COURSE_ACCESS_DENIED',
+      );
+    }
+
     if (course.key_password && course.key_password !== key) {
       throw new ApiForbiddenError('Invalid course key', 'COURSE_ACCESS_DENIED');
     }
 
+    const currentRun = await this.getCurrentCourseRunOrCreate(normalizedCourseId);
     const existingEnrollment = await this.findCourseEnrollment(
       normalizedCourseId,
-      userId,
+      actorId,
+      currentRun.id,
     );
 
     if (existingEnrollment) {
+      if (existingEnrollment.role !== CourseMemberRole.STUDENT) {
+        throw new ApiForbiddenError(
+          'Teaching roles cannot be enrolled as students',
+          'COURSE_ACCESS_DENIED',
+        );
+      }
+
       return mapEnrollmentToDto(existingEnrollment);
+    }
+
+    const ownerId = this.toOptionalNumber(actorId);
+
+    if (ownerId !== undefined && course.owner_id === ownerId) {
+      throw new ApiForbiddenError(
+        'Course owners cannot be enrolled as students',
+        'COURSE_ACCESS_DENIED',
+      );
     }
 
     const enrollment = new Enrollment();
     enrollment.courseId = normalizedCourseId;
     enrollment.course = course;
-    enrollment.userId = this.toUserId(userId);
+    enrollment.courseRunId = currentRun.id;
+    enrollment.courseRun = currentRun;
+    enrollment.userId = actorId;
     enrollment.role = CourseMemberRole.STUDENT;
-    enrollment.createdBy = this.toUserId(userId);
-    enrollment.updatedBy = this.toUserId(userId);
+    enrollment.createdBy = actorId;
+    enrollment.updatedBy = actorId;
 
-    return mapEnrollmentToDto(await this.enrollmentRepository.save(enrollment));
+    const savedEnrollment = await this.enrollmentRepository.save(enrollment);
+    await this.initializeImmediateTaskProgressForEnrollment(
+      normalizedCourseId,
+      savedEnrollment,
+      actorId,
+    );
+
+    return mapEnrollmentToDto(savedEnrollment);
   }
 
   async leaveCourse(
@@ -1001,6 +2924,7 @@ export class CoursesService {
 
     await this.enrollmentRepository.delete({
       courseId: this.toCourseId(courseId),
+      courseRunId: (await this.getCurrentCourseRunOrCreate(courseId)).id,
       userId: normalizedUserId,
     });
   }
@@ -1039,6 +2963,12 @@ export class CoursesService {
 
     if (body.semester !== undefined) {
       course.semester = body.semester;
+    }
+
+    if (body.recurrenceType !== undefined || body.recurrence_type !== undefined) {
+      course.recurrenceType = this.normalizeRecurrenceType(
+        body.recurrenceType ?? body.recurrence_type,
+      );
     }
 
     if (status !== undefined) {
@@ -1104,7 +3034,7 @@ export class CoursesService {
 
   /**
    * Create a new learning material for a course
-   * 
+   *
    * @param {string} courseId - ID of the course to add the material to
    * @param {string} title - Title of the learning material
    * @param {string} description - Description of the material
@@ -1123,6 +3053,8 @@ export class CoursesService {
     filePath: string,
     createdBy: string,
   ): Promise<LearningMaterial> {
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
     const material = new LearningMaterial();
     material.title = this.requireMaterialTitle(title);
     material.description = description;
@@ -1132,6 +3064,10 @@ export class CoursesService {
     material.createdBy = createdBy;
     material.updatedBy = createdBy;
     material.courseId = this.toCourseId(courseId);
+    material.courseRunId = currentRun.id;
+    material.courseRun = currentRun;
+    material.courseVersionId = version.id;
+    material.courseVersion = version;
     material.isPublished = false;
     material.publicationStatus = LearningMaterialPublicationStatus.DRAFT;
     material.tags = [];
@@ -1142,7 +3078,10 @@ export class CoursesService {
     course.id = courseId;
     material.course = course;
 
-    return this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+
+    return savedMaterial;
   }
 
   async createLearningMaterialFile(
@@ -1174,6 +3113,12 @@ export class CoursesService {
     );
     const material = new LearningMaterial();
     material.courseId = this.toCourseId(courseId);
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
+    material.courseRunId = currentRun.id;
+    material.courseRun = currentRun;
+    material.courseVersionId = version.id;
+    material.courseVersion = version;
     material.title = this.requireMaterialTitle(body.title);
     material.description = body.description;
     material.type = materialType;
@@ -1189,9 +3134,19 @@ export class CoursesService {
     material.isPublished = false;
     material.createdBy = actorId;
     material.updatedBy = actorId;
+    await this.applyLearningMaterialReleaseConfiguration(
+      material,
+      body as Record<string, unknown>,
+      true,
+    );
 
-    return mapLearningMaterialToDto(
-      await this.learningMaterialRepository.save(material),
+    const savedMaterial = await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+
+    return this.mapLearningMaterialForActor(
+      savedMaterial,
+      actorId,
+      CourseMemberRole.TEACHER,
     );
   }
 
@@ -1209,6 +3164,12 @@ export class CoursesService {
 
     const material = new LearningMaterial();
     material.courseId = this.toCourseId(courseId);
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
+    material.courseRunId = currentRun.id;
+    material.courseRun = currentRun;
+    material.courseVersionId = version.id;
+    material.courseVersion = version;
     material.title = this.requireMaterialTitle(body.title);
     material.description = body.description;
     material.type = LearningMaterialType.EXTERNAL_LINK;
@@ -1220,9 +3181,19 @@ export class CoursesService {
     material.isPublished = false;
     material.createdBy = actorId;
     material.updatedBy = actorId;
+    await this.applyLearningMaterialReleaseConfiguration(
+      material,
+      body as Record<string, unknown>,
+      true,
+    );
 
-    return mapLearningMaterialToDto(
-      await this.learningMaterialRepository.save(material),
+    const savedMaterial = await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+
+    return this.mapLearningMaterialForActor(
+      savedMaterial,
+      actorId,
+      CourseMemberRole.TEACHER,
     );
   }
 
@@ -1236,9 +3207,13 @@ export class CoursesService {
       CoursePermission.ReadCourseContent,
     );
     const canManage = hasCoursePermission(role, CoursePermission.ManageCourseContent);
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
     const materials = await this.learningMaterialRepository.find({
       where: {
         courseId: this.toCourseId(courseId),
+        courseRunId: currentRun.id,
+        courseVersionId: version.id,
         publicationStatus: canManage
           ? Not(LearningMaterialPublicationStatus.ARCHIVED)
           : LearningMaterialPublicationStatus.PUBLISHED,
@@ -1249,7 +3224,81 @@ export class CoursesService {
       },
     });
 
-    return materials.map(mapLearningMaterialToDto);
+    return Promise.all(
+      materials.map((material) =>
+        this.mapLearningMaterialForActor(material, actorUserId, role),
+      ),
+    );
+  }
+
+  async getLearningMaterialsByCourseRun(
+    courseId: string,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<LearningMaterialResponseDto[]> {
+    const run = await this.assertCourseRunManageable(courseId, runId, actorUserId);
+    const version = await this.getActiveCourseVersionForRunOrThrow(
+      this.toCourseId(courseId),
+      run.id,
+    );
+    const materials = await this.learningMaterialRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+        courseRunId: run.id,
+        courseVersionId: version.id,
+        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+      },
+      order: {
+        sortOrder: 'ASC',
+        createdAt: 'DESC',
+      },
+    });
+
+    return Promise.all(
+      materials.map((material) =>
+        this.mapLearningMaterialForActor(
+          material,
+          actorUserId,
+          CourseMemberRole.TEACHER,
+        ),
+      ),
+    );
+  }
+
+  async getLearningMaterialsByCourseVersion(
+    courseId: string,
+    runId: string,
+    versionId: string,
+    actorUserId?: string | number,
+  ): Promise<LearningMaterialResponseDto[]> {
+    const run = await this.assertCourseRunManageable(courseId, runId, actorUserId);
+    const version = await this.findCourseVersionInRunOrThrow(
+      this.toCourseId(courseId),
+      run.id,
+      versionId,
+    );
+    const materials = await this.learningMaterialRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+        courseRunId: run.id,
+        courseVersionId: version.id,
+        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+      },
+      order: {
+        sortOrder: 'ASC',
+        createdAt: 'DESC',
+      },
+    });
+
+    return Promise.all(
+      materials.map((material) =>
+        this.mapLearningMaterialForActor(
+          material,
+          actorUserId,
+          CourseMemberRole.TEACHER,
+        ),
+      ),
+    );
   }
 
   async getLearningMaterialById(
@@ -1258,9 +3307,9 @@ export class CoursesService {
   ): Promise<LearningMaterialResponseDto> {
     const material = await this.findLearningMaterialOrThrow(id);
 
-    await this.assertLearningMaterialReadable(material, actorUserId);
+    const role = await this.assertLearningMaterialReadable(material, actorUserId);
 
-    return mapLearningMaterialToDto(material);
+    return this.mapLearningMaterialForActor(material, actorUserId, role);
   }
 
   async updateLearningMaterialMetadata(
@@ -1321,10 +3370,20 @@ export class CoursesService {
       material.sortOrder = this.parseSortOrder(body.sortOrder);
     }
 
+    await this.applyLearningMaterialReleaseConfiguration(
+      material,
+      body as Record<string, unknown>,
+    );
+
     material.updatedBy = actorId;
 
-    return mapLearningMaterialToDto(
-      await this.learningMaterialRepository.save(material),
+    const savedMaterial = await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+
+    return this.mapLearningMaterialForActor(
+      savedMaterial,
+      actorId,
+      CourseMemberRole.TEACHER,
     );
   }
 
@@ -1348,10 +3407,14 @@ export class CoursesService {
       .map((item) => item.id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
 
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
     const materials = await this.learningMaterialRepository.find({
       where: {
         id: In(materialIds),
         courseId: this.toCourseId(courseId),
+        courseRunId: currentRun.id,
+        courseVersionId: version.id,
         publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
       },
     });
@@ -1367,9 +3430,19 @@ export class CoursesService {
       material.updatedBy = actorId;
     }
 
-    return (await this.learningMaterialRepository.save(materials))
-      .sort((left, right) => left.sortOrder - right.sortOrder)
-      .map(mapLearningMaterialToDto);
+    const savedMaterials = (await this.learningMaterialRepository.save(materials))
+      .sort((left, right) => left.sortOrder - right.sortOrder);
+    await this.refreshCourseVersionContent(version.id);
+
+    return Promise.all(
+      savedMaterials.map((material) =>
+        this.mapLearningMaterialForActor(
+          material,
+          actorId,
+          CourseMemberRole.TEACHER,
+        ),
+      ),
+    );
   }
 
   async deleteLearningMaterial(
@@ -1387,6 +3460,7 @@ export class CoursesService {
     material.updatedBy = actorId;
 
     await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(material.courseVersionId);
   }
 
   async publishLearningMaterial(
@@ -1403,8 +3477,13 @@ export class CoursesService {
     material.publishedAt = new Date();
     material.updatedBy = actorId;
 
-    return mapLearningMaterialToDto(
-      await this.learningMaterialRepository.save(material),
+    const savedMaterial = await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+
+    return this.mapLearningMaterialForActor(
+      savedMaterial,
+      actorId,
+      CourseMemberRole.TEACHER,
     );
   }
 
@@ -1421,8 +3500,13 @@ export class CoursesService {
     material.publicationStatus = LearningMaterialPublicationStatus.DRAFT;
     material.updatedBy = actorId;
 
-    return mapLearningMaterialToDto(
-      await this.learningMaterialRepository.save(material),
+    const savedMaterial = await this.learningMaterialRepository.save(material);
+    await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
+
+    return this.mapLearningMaterialForActor(
+      savedMaterial,
+      actorId,
+      CourseMemberRole.TEACHER,
     );
   }
 
@@ -1432,7 +3516,22 @@ export class CoursesService {
   ): Promise<LearningMaterialDownload> {
     const material = await this.findLearningMaterialOrThrow(id);
 
-    await this.assertLearningMaterialReadable(material, actorUserId);
+    const role = await this.assertLearningMaterialReadable(material, actorUserId);
+    const visibility = await this.buildLearningMaterialVisibility(
+      material,
+      actorUserId,
+      role,
+    );
+
+    if (
+      !hasCoursePermission(role, CoursePermission.ManageCourseContent) &&
+      !visibility.visible
+    ) {
+      throw new ApiForbiddenError(
+        visibility.lockedReason ?? 'Learning material is locked',
+        'MATERIAL_ACCESS_DENIED',
+      );
+    }
 
     if (!material.storageKey) {
       throw new ApiValidationError('External links do not have downloadable files');
@@ -1477,14 +3576,11 @@ export class CoursesService {
       : mapMissingCourseResultToDto(this.toCourseId(courseId), enrollment);
   }
 
-  async getCourseResults(
+  private async buildCourseResultsForRun(
     courseId: string,
+    courseRunId: string,
     query: CourseResultListQueryDto = {},
-    actorUserId?: string | number,
   ): Promise<CourseResultListResponseDto> {
-    await this.assertCourseResultManager(courseId, actorUserId);
-    await this.findCourseOrThrow(courseId);
-
     const page = this.parsePaginationValue(query.page, 1);
     const pageSize = this.parsePaginationValue(query.pageSize, 10, 100);
     const passStatus = this.normalizeOptionalPassStatus(query.passStatus);
@@ -1492,6 +3588,7 @@ export class CoursesService {
     const enrollments = await this.enrollmentRepository.find({
       where: {
         courseId: this.toCourseId(courseId),
+        courseRunId,
         role: CourseMemberRole.STUDENT,
       },
       order: {
@@ -1501,6 +3598,7 @@ export class CoursesService {
     const results = await this.courseResultRepository.find({
       where: {
         courseId: this.toCourseId(courseId),
+        courseRunId,
       },
     });
     const resultByEnrollmentId = new Map(
@@ -1529,6 +3627,29 @@ export class CoursesService {
       pageSize,
       total: allItems.length,
     };
+  }
+
+  async getCourseResults(
+    courseId: string,
+    query: CourseResultListQueryDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseResultListResponseDto> {
+    await this.assertCourseResultManager(courseId, actorUserId);
+    await this.findCourseOrThrow(courseId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
+
+    return this.buildCourseResultsForRun(courseId, currentRun.id, query);
+  }
+
+  async getCourseResultsByRun(
+    courseId: string,
+    runId: string,
+    query: CourseResultListQueryDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseResultListResponseDto> {
+    const run = await this.assertCourseRunManageable(courseId, runId, actorUserId);
+
+    return this.buildCourseResultsForRun(courseId, run.id, query);
   }
 
   async setManualCourseResult(
@@ -1615,9 +3736,11 @@ export class CoursesService {
     actorUserId?: string | number,
   ): Promise<CourseResultListResponseDto> {
     const actorId = await this.assertCourseResultManager(courseId, actorUserId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
     const enrollments = await this.enrollmentRepository.find({
       where: {
         courseId: this.toCourseId(courseId),
+        courseRunId: currentRun.id,
         role: CourseMemberRole.STUDENT,
       },
       order: {
@@ -1654,6 +3777,7 @@ export class CoursesService {
     dueDate: Date,
     createdBy: string,
   ): Promise<Assignment> {
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
     const assignment = new Assignment();
     assignment.title = title;
     assignment.description = description;
@@ -1670,13 +3794,20 @@ export class CoursesService {
     const course = new Course();
     course.id = courseId;
     assignment.course = course;
+    assignment.courseRunId = currentRun.id;
+    assignment.courseRun = currentRun;
 
     return this.assignmentRepository.save(assignment);
   }
 
   async getAssignmentsByCourse(courseId: string): Promise<Assignment[]> {
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
+
     return this.assignmentRepository.find({
-      where: { course: { id: courseId } },
+      where: {
+        course: { id: courseId },
+        courseRunId: currentRun.id,
+      },
       relations: ['grades'],
     });
   }
@@ -1883,7 +4014,7 @@ export class CoursesService {
 
     for (const assignment of assignments) {
       const grade = grades.find(g => g.assignment.id === assignment.id);
-      
+
       if (grade && grade.isFinal) {
         const maxPoints = this.ensureValidAssignmentMaxPoints(assignment);
 
@@ -1943,7 +4074,746 @@ export class CoursesService {
     return performanceData;
   }
 
+  async listCourseVersions(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto[]> {
+    await this.assertCourseVersionReadable(courseId, actorUserId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
+
+    return this.listCourseVersionsByRun(courseId, currentRun.id, actorUserId);
+  }
+
+  async listCourseVersionsByRun(
+    courseId: string,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto[]> {
+    await this.assertCourseRunManageable(courseId, runId, actorUserId);
+    await this.getActiveCourseVersionForRunOrThrow(this.toCourseId(courseId), runId);
+
+    const versions = await this.courseVersionRepository.find({
+      where: {
+        course_id: this.toCourseId(courseId),
+        course_run_id: runId,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+      order: {
+        version_number: 'DESC',
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+
+    return Promise.all(
+      versions.map((version) => this.mapCourseVersionWithTemplateInfo(version)),
+    );
+  }
+
+  async listCourseVersionTemplates(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto[]> {
+    await this.assertCoursePermission(
+      courseId,
+      actorUserId,
+      CoursePermission.ManageCourseContent,
+    );
+
+    const versions = await this.courseVersionRepository.find({
+      where: {
+        course_id: this.toCourseId(courseId),
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+      order: {
+        version_number: 'DESC',
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+    const versionsWithRunInfo = await Promise.all(
+      versions.map((version) => this.hydrateCourseVersionTemplateInfo(version)),
+    );
+
+    return versionsWithRunInfo
+      .sort((left, right) => {
+        const leftRunDate = left.courseRun?.startDate ?? left.courseRun?.createdAt?.toISOString() ?? '';
+        const rightRunDate = right.courseRun?.startDate ?? right.courseRun?.createdAt?.toISOString() ?? '';
+        const runComparison = rightRunDate.localeCompare(leftRunDate);
+
+        return runComparison !== 0
+          ? runComparison
+          : right.version_number - left.version_number;
+      })
+      .map(mapCourseVersionToDto);
+  }
+
+  async getCourseVersion(
+    courseId: string,
+    versionId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto> {
+    await this.assertCourseVersionReadable(courseId, actorUserId);
+
+    const version = await this.courseVersionRepository.findOne({
+      where: {
+        id: versionId,
+        course_id: this.toCourseId(courseId),
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+
+    if (!version) {
+      throw new ApiNotFoundError('Course version not found', 'COURSE_NOT_FOUND');
+    }
+
+    return this.mapCourseVersionWithTemplateInfo(version);
+  }
+
+  async createCourseVersion(
+    courseId: string,
+    body: CreateCourseVersionDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
+
+    return this.createCourseVersionForRun(courseId, currentRun.id, body, actorId);
+  }
+
+  async createCourseVersionForRun(
+    courseId: string,
+    runId: string,
+    body: CreateCourseVersionDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    const course = await this.findCourseOrThrow(courseId);
+    const run = await this.assertCourseRunManageable(courseId, runId, actorId);
+    const existingVersions = await this.courseVersionRepository.find({
+      where: {
+        course_id: course.id,
+        course_run_id: run.id,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+      order: {
+        version_number: 'DESC',
+      },
+      relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+    });
+    const copyMode = String(
+      body.copyMode ?? (body.sourceVersionId ? 'SOURCE' : 'ACTIVE'),
+    ).toUpperCase();
+
+    if (!['ACTIVE', 'SOURCE', 'EMPTY'].includes(copyMode)) {
+      throw new ApiValidationError('Invalid course version copy mode');
+    }
+
+    if (copyMode === 'SOURCE' && !body.sourceVersionId) {
+      throw new ApiValidationError('Eine Quellversion ist erforderlich.');
+    }
+
+    const sourceVersion = copyMode === 'EMPTY'
+      ? null
+      : body.sourceVersionId
+        ? await this.findCourseVersionTemplateOrThrow(course.id, body.sourceVersionId)
+        : existingVersions.find((version) => version.is_active) ?? existingVersions[0] ?? null;
+    const activate = body.activate === true || !existingVersions.some((version) => version.is_active);
+
+    if (sourceVersion && sourceVersion.course_id !== course.id) {
+      throw new ApiValidationError(
+        'Die ausgewählte Inhaltsvorlage gehört nicht zu diesem Kurs.',
+      );
+    }
+
+    if (activate && existingVersions.length > 0) {
+      existingVersions.forEach((version) => {
+        version.is_active = false;
+      });
+      await this.courseVersionRepository.save(existingVersions);
+    }
+
+    const version = new CourseVersion();
+    version.course_id = course.id;
+    version.course = course;
+    version.course_run_id = run.id;
+    version.courseRun = run;
+    version.version_number = await this.getNextCourseVersionNumber(run.id);
+    version.label = this.normalizeChangeSummary(body.label) ?? `Version ${version.version_number}`;
+    version.content = {};
+    version.change_summary = this.normalizeChangeSummary(
+      body.changeSummary ?? body.change_summary,
+    );
+    version.status = CourseVersionStatus.PUBLISHED;
+    version.sourceVersionId = sourceVersion?.id ?? null;
+    version.created_by = actorId;
+    version.is_active = activate;
+
+    const savedVersion = await this.courseVersionRepository.save(version);
+
+    if (sourceVersion) {
+      await this.copyCourseVersionContentToRun(
+        sourceVersion,
+        run,
+        actorId,
+        savedVersion,
+      );
+    }
+
+    await this.refreshCourseVersionContent(savedVersion.id);
+
+    return this.mapCourseVersionWithTemplateInfo(
+      await this.courseVersionRepository.findOne({
+        where: { id: savedVersion.id },
+        relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
+      }) ?? savedVersion,
+    );
+  }
+
+  async activateCourseVersion(
+    courseId: string,
+    versionId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    return this.mapCourseVersionWithTemplateInfo(
+      await this.setActiveCourseVersion(
+        this.toCourseId(courseId),
+        versionId,
+      ),
+    );
+  }
+
+  async activateCourseVersionForRun(
+    courseId: string,
+    runId: string,
+    versionId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseVersionResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+    await this.findCourseVersionInRunOrThrow(
+      this.toCourseId(courseId),
+      runId,
+      versionId,
+    );
+
+    return this.activateCourseVersion(courseId, versionId, actorId);
+  }
+
+  async deleteCourseVersion(
+    courseId: string,
+    runId: string,
+    versionId: string,
+    actorUserId?: string | number,
+  ): Promise<void> {
+    const actorId = this.requireActorUserId(actorUserId);
+    const run = await this.assertCourseRunManageable(courseId, runId, actorId);
+
+    if (run.status === CourseRunStatus.ARCHIVED) {
+      throw new ApiValidationError(
+        'Versionen archivierter Kursdurchläufe können nicht gelöscht werden.',
+      );
+    }
+
+    const version = await this.courseVersionRepository.findOne({
+      where: {
+        id: versionId,
+        course_id: this.toCourseId(courseId),
+        course_run_id: run.id,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+    });
+
+    if (!version) {
+      throw new ApiNotFoundError('Course version not found', 'COURSE_NOT_FOUND');
+    }
+
+    if (version.is_active) {
+      throw new ApiValidationError(
+        'Diese Version kann nicht gelöscht werden, da sie die aktive Version des Durchlaufs ist.',
+      );
+    }
+
+    const versionsInRun = await this.courseVersionRepository.find({
+      where: {
+        course_id: this.toCourseId(courseId),
+        course_run_id: run.id,
+        status: Not(CourseVersionStatus.ARCHIVED),
+      },
+    });
+
+    if (versionsInRun.length <= 1) {
+      throw new ApiValidationError(
+        'Diese Version kann nicht gelöscht werden, da sie die einzige Version des Durchlaufs ist.',
+      );
+    }
+
+    const referencingVersions = await this.courseVersionRepository.find({
+      where: {
+        sourceVersionId: version.id,
+      },
+    });
+
+    if (referencingVersions.length > 0) {
+      throw new ApiValidationError(
+        'Diese Version kann nicht gelöscht werden, da ein späterer Durchlauf auf ihr basiert.',
+      );
+    }
+
+    const versionTasks = await this.taskRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+        courseRunId: run.id,
+        courseVersionId: version.id,
+      },
+    });
+
+    if (versionTasks.length > 0) {
+      const progressCount = await this.taskProgressRepository.count({
+        where: {
+          taskId: In(versionTasks.map((task) => task.id)),
+        },
+      });
+
+      if (progressCount > 0) {
+        throw new ApiValidationError(
+          'Diese Version kann nicht gelöscht werden, da sie Lernfortschritt enthält.',
+        );
+      }
+    }
+
+    await this.courseVersionRepository.delete(version.id);
+  }
+
+  async listCourseRuns(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRunResponseDto[]> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourseContent,
+    );
+    const runs = await this.courseRunRepository.find({
+      where: {
+        courseId: this.toCourseId(courseId),
+      },
+      order: {
+        startDate: 'DESC',
+        createdAt: 'DESC',
+      },
+    });
+
+    return Promise.all(runs.map((run) => this.mapCourseRunWithCounts(run)));
+  }
+
+  async getCurrentCourseRun(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRunResponseDto> {
+    const run = await this.getCurrentCourseRunOrCreate(courseId);
+    await this.assertCourseRunReadable(this.toCourseId(courseId), run.id, actorUserId);
+
+    return this.mapCourseRunWithCounts(run);
+  }
+
+  async getCourseRun(
+    courseId: string,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRunResponseDto> {
+    await this.assertCourseRunReadable(this.toCourseId(courseId), runId, actorUserId);
+    const run = await this.courseRunRepository.findOne({
+      where: {
+        id: runId,
+        courseId: this.toCourseId(courseId),
+      },
+    });
+
+    if (!run) {
+      throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
+    }
+
+    return this.mapCourseRunWithCounts(run);
+  }
+
+  async getCourseRunPlan(
+    courseId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRunPlanResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    const course = await this.findCourseOrThrow(courseId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
+    const nextRun = this.calculatePlannedNextRunFields(course, currentRun);
+    const templateVersion = await this.resolveCourseRunTemplateVersion(
+      course,
+      currentRun,
+    );
+
+    return {
+      recurrenceType: course.recurrenceType ?? CourseRecurrenceType.CONTINUOUS,
+      currentRun: await this.mapCourseRunWithCounts(currentRun),
+      nextRun,
+      templateStrategy: this.normalizeCourseRunTemplateStrategy(
+        course.contentTemplateStrategy,
+      ),
+      templateVersion: templateVersion
+        ? await this.mapCourseVersionWithTemplateInfo(templateVersion)
+        : null,
+      regularPlanningAvailable: nextRun !== null,
+    };
+  }
+
+  async updateCourseRunPlanTemplate(
+    courseId: string,
+    body: UpdateCourseRunPlanTemplateDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseRunPlanResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    const course = await this.findCourseOrThrow(courseId);
+    const strategy = this.normalizeCourseRunTemplateStrategy(
+      body.strategy ?? body.contentTemplateStrategy,
+    );
+    const sourceVersionId = body.sourceVersionId ?? body.plannedSourceVersionId ?? null;
+
+    if (strategy === CourseRunTemplateStrategy.SPECIFIC_VERSION) {
+      if (!sourceVersionId) {
+        throw new ApiValidationError(
+          'Für eine konkrete Inhaltsvorlage muss eine CourseVersion ausgewählt werden.',
+        );
+      }
+
+      const sourceVersion = await this.findCourseVersionTemplateOrThrow(
+        course.id,
+        sourceVersionId,
+      );
+      course.plannedSourceVersionId = sourceVersion.id;
+    } else {
+      course.plannedSourceVersionId = null;
+    }
+
+    course.contentTemplateStrategy = strategy;
+    await this.coursesRepository.save(course);
+
+    return this.getCourseRunPlan(course.id, actorId);
+  }
+
+  private async createCourseRunFromTemplate(
+    course: Course,
+    previousRun: CourseRun,
+    fields: {
+      label: string;
+      startDate?: string;
+      endDate?: string;
+    },
+    sourceVersion: CourseVersion | null,
+    body: CreateCourseRunDto,
+    actorId: string,
+  ): Promise<CourseRunResponseDto> {
+    const sourceRunId = sourceVersion?.course_run_id ?? previousRun.id;
+    const activate = body.activate === true;
+    const run = new CourseRun();
+    run.courseId = course.id;
+    run.course = course;
+    run.label = fields.label;
+    run.startDate = fields.startDate;
+    run.endDate = fields.endDate;
+    run.status = this.normalizeCourseRunStatus(body.status) ?? previousRun.status;
+    run.sourceRunId = sourceRunId;
+    run.isActive = false;
+    run.createdBy = actorId;
+
+    const savedRun = await this.courseRunRepository.save(run);
+    const targetVersion = await this.createInitialContentVersionForRun(
+      course,
+      savedRun,
+      actorId,
+      `Initiale Inhaltsversion fuer ${savedRun.label}`,
+      sourceVersion?.id,
+    );
+
+    if (sourceVersion) {
+      await this.copyCourseVersionContentToRun(
+        sourceVersion,
+        savedRun,
+        actorId,
+        targetVersion,
+      );
+    }
+
+    await this.refreshCourseVersionContent(targetVersion.id);
+
+    if (activate) {
+      await this.setActiveCourseRun(course.id, savedRun.id);
+    }
+
+    const reloadedRun = await this.courseRunRepository.findOne({
+      where: {
+        id: savedRun.id,
+      },
+    });
+
+    return this.mapCourseRunWithCounts(reloadedRun ?? savedRun);
+  }
+
+  async createCourseRun(
+    courseId: string,
+    body: CreateCourseRunDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseRunResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    const course = await this.findCourseOrThrow(courseId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
+    const fields = this.calculatePlannedNextRunFields(course, currentRun);
+
+    if (!fields) {
+      throw new ApiValidationError(
+        'Dauerhafte Kurse haben keinen automatisch geplanten nächsten Durchlauf.',
+      );
+    }
+
+    await this.assertPlannedRunDoesNotExist(course.id, fields);
+
+    const sourceVersion = await this.resolveCourseRunTemplateVersion(
+      course,
+      currentRun,
+      body.sourceVersionId,
+    );
+
+    return this.createCourseRunFromTemplate(
+      course,
+      currentRun,
+      fields,
+      sourceVersion,
+      body,
+      actorId,
+    );
+  }
+
+  async createSpecialCourseRun(
+    courseId: string,
+    body: CreateCourseRunDto = {},
+    actorUserId?: string | number,
+  ): Promise<CourseRunResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    const course = await this.findCourseOrThrow(courseId);
+    const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
+    const fields = this.calculateSpecialRunFields(body);
+    await this.assertPlannedRunDoesNotExist(course.id, fields);
+    const sourceVersion = await this.resolveCourseRunTemplateVersion(
+      course,
+      currentRun,
+      body.sourceVersionId,
+    );
+
+    return this.createCourseRunFromTemplate(
+      course,
+      currentRun,
+      fields,
+      sourceVersion,
+      body,
+      actorId,
+    );
+  }
+
+  async activateCourseRun(
+    courseId: string,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRunResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+
+    return this.mapCourseRunWithCounts(
+      await this.setActiveCourseRun(this.toCourseId(courseId), runId),
+    );
+  }
+
+  async deleteOrArchiveCourseRun(
+    courseId: string,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<CourseRunDeletionResponseDto> {
+    const actorId = this.requireActorUserId(actorUserId);
+    await this.assertCoursePermission(
+      courseId,
+      actorId,
+      CoursePermission.ManageCourse,
+    );
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.courseRunRepository.findOne({
+      where: {
+        id: runId,
+        courseId: normalizedCourseId,
+      },
+    });
+
+    if (!run) {
+      throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
+    }
+
+    if (run.isActive) {
+      throw new ApiValidationError(
+        'Der aktive Kursdurchlauf kann nicht gelöscht oder archiviert werden. Aktiviere zuerst einen anderen Durchlauf.',
+      );
+    }
+
+    const allRuns = await this.courseRunRepository.find({
+      where: {
+        courseId: normalizedCourseId,
+      },
+    });
+
+    if (allRuns.length <= 1) {
+      throw new ApiValidationError('Der letzte verbleibende Kursdurchlauf kann nicht gelöscht werden.');
+    }
+
+    const [enrollments, tasks, materials, assignments, results] = await Promise.all([
+      this.enrollmentRepository.find({ where: { courseRunId: run.id } }),
+      this.taskRepository.find({ where: { courseRunId: run.id } }),
+      this.learningMaterialRepository.find({ where: { courseRunId: run.id } }),
+      this.assignmentRepository.find({ where: { courseRunId: run.id } }),
+      this.courseResultRepository.find({ where: { courseRunId: run.id } }),
+    ]);
+    const progressRecords = tasks.length > 0
+      ? await this.taskProgressRepository.find({
+        where: {
+          taskId: In(tasks.map((task) => task.id)),
+        },
+      })
+      : [];
+    const mustArchive =
+      enrollments.length > 0 ||
+      progressRecords.length > 0 ||
+      assignments.length > 0 ||
+      results.length > 0;
+
+    if (mustArchive) {
+      run.status = CourseRunStatus.ARCHIVED;
+      run.isActive = false;
+      const archivedRun = await this.courseRunRepository.save(run);
+
+      return {
+        action: 'ARCHIVED',
+        reason: 'Der Durchlauf enthält Teilnehmer, Fortschritt, Bewertungen oder Abgaben und wurde deshalb archiviert.',
+        run: await this.mapCourseRunWithCounts(archivedRun),
+      };
+    }
+
+    await this.deleteUnreferencedMaterialFilesForRun(run, materials);
+    await this.courseRunRepository.delete(run.id);
+
+    return {
+      action: 'DELETED',
+      reason: 'Der leere inaktive Durchlauf wurde gelöscht.',
+    };
+  }
+
+  private async deleteUnreferencedMaterialFilesForRun(
+    run: CourseRun,
+    materials: LearningMaterial[],
+  ): Promise<void> {
+    const storageKeys = new Set(
+      materials
+        .map((material) => material.storageKey)
+        .filter((storageKey): storageKey is string => Boolean(storageKey)),
+    );
+
+    for (const storageKey of storageKeys) {
+      const references = await this.learningMaterialRepository.find({
+        where: {
+          courseId: run.courseId,
+          storageKey,
+        },
+      });
+      const isReferencedByAnotherRun = references.some(
+        (reference) => reference.courseRunId !== run.id,
+      );
+
+      if (!isReferencedByAnotherRun) {
+        await this.materialStorage.deleteFile(run.courseId, storageKey);
+      }
+    }
+  }
+
   // Task and learning process methods
+  private async initializeImmediateTaskProgressForEnrollment(
+    courseId: string,
+    enrollment: Enrollment,
+    actorId: string,
+  ): Promise<void> {
+    const activeVersion = enrollment.courseRunId
+      ? await this.getActiveCourseVersionForRunOrThrow(courseId, enrollment.courseRunId)
+      : null;
+    const immediateTasks = await this.taskRepository.find({
+      where: {
+        courseId,
+        courseRunId: enrollment.courseRunId,
+        ...(activeVersion ? { courseVersionId: activeVersion.id } : {}),
+        isPublished: true,
+        unlockMode: TaskUnlockMode.IMMEDIATE,
+      },
+      order: {
+        order: 'ASC',
+      },
+    });
+
+    for (const task of immediateTasks) {
+      await this.ensureTaskProgress(task, enrollment, actorId);
+    }
+  }
+
   private normalizeTaskUnlockMode(
     unlockMode: unknown,
     defaultMode = TaskUnlockMode.IMMEDIATE,
@@ -2028,6 +4898,18 @@ export class CoursesService {
       throw new ApiForbiddenError('Task is not published', 'TASK_ACCESS_DENIED');
     }
 
+    if (!hasCoursePermission(role, CoursePermission.ManageCourseContent)) {
+      const { run: currentRun, version } =
+        await this.getActiveCourseVersionForCurrentRunOrThrow(task.courseId);
+
+      if (task.courseRunId !== currentRun.id || task.courseVersionId !== version.id) {
+        throw new ApiForbiddenError(
+          'Task is not available in the active content version',
+          'TASK_ACCESS_DENIED',
+        );
+      }
+    }
+
     return role;
   }
 
@@ -2073,6 +4955,7 @@ export class CoursesService {
     taskId: string | undefined,
     unlockMode: TaskUnlockMode,
     prerequisiteTaskId?: string,
+    courseVersionId?: string,
   ): Promise<void> {
     if (unlockMode === TaskUnlockMode.IMMEDIATE && prerequisiteTaskId) {
       throw new ApiValidationError('Immediately available tasks cannot define a prerequisite');
@@ -2094,8 +4977,14 @@ export class CoursesService {
       where: { id: prerequisiteTaskId },
     });
 
-    if (!prerequisite || prerequisite.courseId !== courseId) {
-      throw new ApiValidationError('Prerequisite task must belong to the same course');
+    if (
+      !prerequisite ||
+      prerequisite.courseId !== courseId ||
+      (courseVersionId && prerequisite.courseVersionId !== courseVersionId)
+    ) {
+      throw new ApiValidationError(
+        'Prerequisite task must belong to the same content version',
+      );
     }
 
     const visitedTaskIds = new Set<string>();
@@ -2120,8 +5009,13 @@ export class CoursesService {
         return;
       }
 
-      if (currentTask.courseId !== courseId) {
-        throw new ApiValidationError('Prerequisite task must belong to the same course');
+      if (
+        currentTask.courseId !== courseId ||
+        (courseVersionId && currentTask.courseVersionId !== courseVersionId)
+      ) {
+        throw new ApiValidationError(
+          'Prerequisite task must belong to the same content version',
+        );
       }
 
       currentTaskId = currentTask.prerequisiteTaskId;
@@ -2327,8 +5221,17 @@ export class CoursesService {
     enrollment: Enrollment,
     includeUnpublished = false,
   ): Promise<LearningPathResponseDto> {
+    const runId = enrollment.courseRunId ?? (await this.getCurrentCourseRunOrCreate(courseId)).id;
+    const activeVersion = await this.getActiveCourseVersionForRunOrThrow(
+      courseId,
+      runId,
+    );
     const tasks = await this.taskRepository.find({
-      where: { courseId },
+      where: {
+        courseId,
+        courseRunId: runId,
+        courseVersionId: activeVersion.id,
+      },
       order: { order: 'ASC' },
     });
     const visibleTasks = includeUnpublished
@@ -2417,6 +5320,8 @@ export class CoursesService {
     const nextTasks = await this.taskRepository.find({
       where: {
         courseId: completedTask.courseId,
+        courseRunId: completedTask.courseRunId,
+        ...(completedTask.courseVersionId ? { courseVersionId: completedTask.courseVersionId } : {}),
         prerequisiteTaskId: completedTask.id,
         unlockMode: TaskUnlockMode.AUTOMATIC,
       },
@@ -2445,6 +5350,8 @@ export class CoursesService {
       CoursePermission.ManageCourseContent,
     );
     await this.findCourseOrThrow(normalizedCourseId);
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(normalizedCourseId);
 
     const unlockMode = this.normalizeTaskUnlockMode(body?.unlockMode);
     const prerequisiteTaskId = this.normalizeTaskPrerequisite(
@@ -2456,11 +5363,16 @@ export class CoursesService {
       undefined,
       unlockMode,
       prerequisiteTaskId,
+      version.id,
     );
 
     const task = new Task();
     task.courseId = normalizedCourseId;
     task.course = { id: normalizedCourseId } as Course;
+    task.courseRunId = currentRun.id;
+    task.courseRun = currentRun;
+    task.courseVersionId = version.id;
+    task.courseVersion = version;
     task.title = this.requireTaskTitle(body?.title);
     task.description = String(body?.description ?? '').trim();
     task.type = String(body?.type ?? 'DEMO_TASK').trim() || 'DEMO_TASK';
@@ -2472,7 +5384,10 @@ export class CoursesService {
     task.createdBy = actorId;
     task.updatedBy = actorId;
 
-    return mapLearningTaskToDto(await this.taskRepository.save(task));
+    const savedTask = await this.taskRepository.save(task);
+    await this.refreshCourseVersionContent(savedTask.courseVersionId);
+
+    return mapLearningTaskToDto(savedTask);
   }
 
   async getTasksByCourse(
@@ -2486,14 +5401,76 @@ export class CoursesService {
       CoursePermission.ReadCourseContent,
     );
     const canManage = hasCoursePermission(role, CoursePermission.ManageCourseContent);
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(normalizedCourseId);
     const tasks = await this.taskRepository.find({
-      where: { courseId: normalizedCourseId },
+      where: {
+        courseId: normalizedCourseId,
+        courseRunId: currentRun.id,
+        courseVersionId: version.id,
+      },
       order: { order: 'ASC' },
     });
 
     return tasks
       .filter((task) => canManage || task.isPublished)
       .map(mapLearningTaskToDto);
+  }
+
+  async getTasksByCourseRun(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<LearningTaskResponseDto[]> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.assertCourseRunManageable(
+      normalizedCourseId,
+      runId,
+      actorUserId,
+    );
+    const version = await this.getActiveCourseVersionForRunOrThrow(
+      normalizedCourseId,
+      run.id,
+    );
+    const tasks = await this.taskRepository.find({
+      where: {
+        courseId: normalizedCourseId,
+        courseRunId: run.id,
+        courseVersionId: version.id,
+      },
+      order: { order: 'ASC' },
+    });
+
+    return tasks.map(mapLearningTaskToDto);
+  }
+
+  async getTasksByCourseVersion(
+    courseId: string | number,
+    runId: string,
+    versionId: string,
+    actorUserId?: string | number,
+  ): Promise<LearningTaskResponseDto[]> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.assertCourseRunManageable(
+      normalizedCourseId,
+      runId,
+      actorUserId,
+    );
+    const version = await this.findCourseVersionInRunOrThrow(
+      normalizedCourseId,
+      run.id,
+      versionId,
+    );
+    const tasks = await this.taskRepository.find({
+      where: {
+        courseId: normalizedCourseId,
+        courseRunId: run.id,
+        courseVersionId: version.id,
+      },
+      order: { order: 'ASC' },
+    });
+
+    return tasks.map(mapLearningTaskToDto);
   }
 
   async getTaskById(
@@ -2529,6 +5506,7 @@ export class CoursesService {
       task.id,
       unlockMode,
       prerequisiteTaskId,
+      task.courseVersionId,
     );
 
     if (body.title !== undefined) {
@@ -2561,6 +5539,7 @@ export class CoursesService {
 
     const savedTask = await this.taskRepository.save(task);
     await this.reconcileTaskProgressAfterConfigurationChange(savedTask);
+    await this.refreshCourseVersionContent(savedTask.courseVersionId);
 
     return mapLearningTaskToDto(savedTask);
   }
@@ -2597,9 +5576,13 @@ export class CoursesService {
       throw new ApiValidationError('Sort order items are required');
     }
 
+    const { run: currentRun, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(normalizedCourseId);
     const tasks = await this.taskRepository.find({
       where: {
         courseId: normalizedCourseId,
+        courseRunId: currentRun.id,
+        courseVersionId: version.id,
         id: In(body.items.map((item) => String(item.id ?? ''))),
       },
     });
@@ -2616,6 +5599,7 @@ export class CoursesService {
     }
 
     const savedTasks = await this.taskRepository.save(tasks);
+    await this.refreshCourseVersionContent(version.id);
 
     return savedTasks.sort((a, b) => a.order - b.order).map(mapLearningTaskToDto);
   }
@@ -2628,7 +5612,10 @@ export class CoursesService {
     await this.assertTaskManageable(task, actorUserId);
 
     const dependentTask = await this.taskRepository.findOne({
-      where: { prerequisiteTaskId: task.id },
+      where: {
+        prerequisiteTaskId: task.id,
+        ...(task.courseVersionId ? { courseVersionId: task.courseVersionId } : {}),
+      },
     });
 
     if (dependentTask) {
@@ -2638,6 +5625,7 @@ export class CoursesService {
     }
 
     await this.taskRepository.delete(id);
+    await this.refreshCourseVersionContent(task.courseVersionId);
   }
 
   async publishTask(
@@ -2838,6 +5826,27 @@ export class CoursesService {
     return this.buildStudentProgressOverview(normalizedCourseId, enrollment);
   }
 
+  private async buildLearningTaskProgressOverviewForRun(
+    courseId: string,
+    runId: string,
+  ): Promise<StudentProgressOverviewDto[]> {
+    const enrollments = await this.enrollmentRepository.find({
+      where: {
+        courseId,
+        courseRunId: runId,
+        role: CourseMemberRole.STUDENT,
+      },
+      order: { userId: 'ASC' },
+    });
+    const overview: StudentProgressOverviewDto[] = [];
+
+    for (const enrollment of enrollments) {
+      overview.push(await this.buildStudentProgressOverview(courseId, enrollment));
+    }
+
+    return overview;
+  }
+
   async getLearningTaskProgressOverview(
     courseId: string | number,
     actorUserId?: string | number,
@@ -2848,20 +5857,30 @@ export class CoursesService {
       actorUserId,
       CoursePermission.ReadAllResults,
     );
-    const enrollments = await this.enrollmentRepository.find({
-      where: {
-        courseId: normalizedCourseId,
-        role: CourseMemberRole.STUDENT,
-      },
-      order: { userId: 'ASC' },
-    });
-    const overview: StudentProgressOverviewDto[] = [];
+    const currentRun = await this.getCurrentCourseRunOrCreate(normalizedCourseId);
 
-    for (const enrollment of enrollments) {
-      overview.push(await this.buildStudentProgressOverview(normalizedCourseId, enrollment));
-    }
+    return this.buildLearningTaskProgressOverviewForRun(
+      normalizedCourseId,
+      currentRun.id,
+    );
+  }
 
-    return overview;
+  async getLearningTaskProgressOverviewByRun(
+    courseId: string | number,
+    runId: string,
+    actorUserId?: string | number,
+  ): Promise<StudentProgressOverviewDto[]> {
+    const normalizedCourseId = this.toCourseId(courseId);
+    const run = await this.assertCourseRunManageable(
+      normalizedCourseId,
+      runId,
+      actorUserId,
+    );
+
+    return this.buildLearningTaskProgressOverviewForRun(
+      normalizedCourseId,
+      run.id,
+    );
   }
 
   // Content Release methods
@@ -3467,9 +6486,15 @@ export class CoursesService {
     limit: number = 10,
     offset: number = 0,
   ): Promise<LearningMaterial[]> {
+    const { run, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
+
     return this.learningMaterialRepository.find({
       where: {
-        course: { id: courseId },
+        courseId: this.toCourseId(courseId),
+        courseRunId: run.id,
+        courseVersionId: version.id,
+        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
         title: ILike(`%${query}%`),
       },
       take: limit,
@@ -3499,9 +6524,14 @@ export class CoursesService {
     limit: number = 10,
     offset: number = 0,
   ): Promise<Task[]> {
+    const { run, version } =
+      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
+
     return this.taskRepository.find({
       where: {
-        course: { id: courseId },
+        courseId: this.toCourseId(courseId),
+        courseRunId: run.id,
+        courseVersionId: version.id,
         title: ILike(`%${query}%`),
       },
       take: limit,

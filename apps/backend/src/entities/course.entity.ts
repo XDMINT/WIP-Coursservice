@@ -17,6 +17,7 @@ import {
 } from 'typeorm';
 
 import { CourseVersion } from './course-version.entity';
+import { CourseRecurrenceType, CourseRun } from './course-run.entity';
 import { CourseGroup } from './course-group.entity';
 import { Enrollment } from './enrollment.entity';
 import { LearningMaterial } from './learning-material.entity';
@@ -41,6 +42,12 @@ export enum CourseStatus {
     ARCHIVED = 'ARCHIVED',
 }
 
+export enum CourseRunTemplateStrategy {
+    ACTIVE_VERSION_OF_CURRENT_RUN = 'ACTIVE_VERSION_OF_CURRENT_RUN',
+    SPECIFIC_VERSION = 'SPECIFIC_VERSION',
+    EMPTY = 'EMPTY',
+}
+
 /**
  * Course Entity Class
  * 
@@ -62,6 +69,27 @@ export class Course {
 
     @Column({ nullable: true })
     semester?: string;
+
+    @Column({
+        name: 'recurrence_type',
+        type: 'varchar',
+        default: CourseRecurrenceType.CONTINUOUS,
+    })
+    recurrenceType: CourseRecurrenceType;
+
+    @Column({
+        name: 'content_template_strategy',
+        type: 'varchar',
+        default: CourseRunTemplateStrategy.ACTIVE_VERSION_OF_CURRENT_RUN,
+    })
+    contentTemplateStrategy: CourseRunTemplateStrategy;
+
+    @Column({
+        name: 'planned_source_version_id',
+        type: 'uuid',
+        nullable: true,
+    })
+    plannedSourceVersionId?: string | null;
 
     @Column({
         type: 'enum',
@@ -93,6 +121,9 @@ export class Course {
 
     @OneToMany(() => CourseVersion, (version) => version.course)
     versions: CourseVersion[];
+
+    @OneToMany(() => CourseRun, (run) => run.course)
+    runs: CourseRun[];
 
     @OneToMany(() => Enrollment, (enrollment) => enrollment.course)
     enrollments: Enrollment[];

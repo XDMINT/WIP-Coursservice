@@ -15,6 +15,8 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Course } from './course.entity';
+import { CourseRun } from './course-run.entity';
+import { CourseVersion } from './course-version.entity';
 import { TaskProgress } from './task-progress.entity';
 
 export enum TaskUnlockMode {
@@ -131,6 +133,26 @@ export class Task {
   })
   @JoinColumn({ name: 'courseId' })
   course: Course;
+
+  @Column({ type: 'uuid', nullable: true })
+  courseRunId?: string;
+
+  @ManyToOne(() => CourseRun, (run) => run.tasks, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'courseRunId' })
+  courseRun?: CourseRun;
+
+  @Column({ type: 'uuid', nullable: true })
+  courseVersionId?: string;
+
+  @ManyToOne(() => CourseVersion, (version) => version.tasks, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'courseVersionId' })
+  courseVersion?: CourseVersion;
 
   /**
    * Student progress records for this task

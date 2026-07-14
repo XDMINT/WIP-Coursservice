@@ -6,8 +6,9 @@
  * 
  * @module AssignmentEntity
  */
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { Course } from './course.entity';
+import { CourseRun } from './course-run.entity';
 import { Grade } from './grade.entity';
 
 /**
@@ -114,6 +115,16 @@ export class Assignment {
    */
   @ManyToOne(() => Course, (course) => course.assignments)
   course: Course;
+
+  @Column({ type: 'uuid', nullable: true })
+  courseRunId?: string;
+
+  @ManyToOne(() => CourseRun, (run) => run.assignments, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'courseRunId' })
+  courseRun?: CourseRun;
 
   /**
    * Grades submitted for this assignment by students

@@ -8,6 +8,8 @@ import {
 export type LearningTaskResponseDto = {
   id: string;
   courseId: string;
+  courseRunId?: string;
+  courseVersionId?: string;
   title: string;
   description: string;
   type: string;
@@ -109,6 +111,8 @@ const toIsoString = (value?: Date): string | undefined =>
 export const mapLearningTaskToDto = (task: Task): LearningTaskResponseDto => ({
   id: task.id,
   courseId: task.courseId,
+  courseRunId: task.courseRunId,
+  courseVersionId: task.courseVersionId,
   title: task.title,
   description: task.description,
   type: task.type,

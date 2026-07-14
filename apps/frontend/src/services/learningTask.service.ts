@@ -23,6 +23,8 @@ export enum TaskUnlockSource {
 export type LearningTask = {
   id: string
   courseId: string
+  courseRunId?: string
+  courseVersionId?: string
   title: string
   description: string
   type: string
@@ -99,8 +101,11 @@ export type UpsertLearningTaskInput = {
 }
 
 class LearningTaskService {
-  async listTasks(courseId: string | number): Promise<LearningTask[]> {
-    const response = await apiClient.get<LearningTask[]>(`/courses/${courseId}/tasks`)
+  async listTasks(courseId: string | number, courseRunId?: string, courseVersionId?: string): Promise<LearningTask[]> {
+    const path = courseRunId && courseVersionId
+      ? `/courses/${courseId}/runs/${courseRunId}/versions/${courseVersionId}/tasks`
+      : courseRunId ? `/courses/${courseId}/runs/${courseRunId}/tasks` : `/courses/${courseId}/tasks`
+    const response = await apiClient.get<LearningTask[]>(path)
     return response.data
   }
 
@@ -109,8 +114,9 @@ class LearningTaskService {
     return response.data
   }
 
-  async getProgressOverview(courseId: string | number): Promise<StudentProgressOverview[]> {
-    const response = await apiClient.get<StudentProgressOverview[]>(`/courses/${courseId}/tasks/progress-overview`)
+  async getProgressOverview(courseId: string | number, courseRunId?: string): Promise<StudentProgressOverview[]> {
+    const path = courseRunId ? `/courses/${courseId}/runs/${courseRunId}/progress` : `/courses/${courseId}/tasks/progress-overview`
+    const response = await apiClient.get<StudentProgressOverview[]>(path)
     return response.data
   }
 

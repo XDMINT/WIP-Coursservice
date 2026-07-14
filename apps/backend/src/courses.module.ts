@@ -6,6 +6,7 @@ import { CoursesService } from './courses.service';
 import { CourseDemoSeedService } from './course-demo-seed.service';
 
 import { Course } from './entities/course.entity';
+import { CourseRun } from './entities/course-run.entity';
 import { CourseVersion } from './entities/course-version.entity';
 import { CourseGroup } from './entities/course-group.entity';
 import { GroupMembership } from './entities/group-membership.entity';
@@ -25,6 +26,7 @@ import { LocalMaterialStorage } from './storage/material-storage';
   imports: [
     TypeOrmModule.forFeature([
       Course,
+      CourseRun,
       CourseVersion,
       Enrollment,
       CourseGroup,
