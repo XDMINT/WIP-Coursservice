@@ -129,6 +129,10 @@ const mountView = () =>
           props: ['courseRunId', 'readOnly'],
           template: '<div class="process-panel">tasks {{ courseRunId }} {{ readOnly ? "readonly" : "editable" }}</div>'
         },
+        StudentCourseJourneyView: {
+          props: ['courseName', 'courseRunLabel'],
+          template: '<div class="student-journey">journey {{ courseName }} {{ courseRunLabel }}</div>'
+        },
         'v-alert': {
           template: '<div class="alert"><slot /></div>'
         },
@@ -176,7 +180,7 @@ describe('ViewCourseOverview', () => {
     ])
   })
 
-  it('hides run and version history for students', async () => {
+  it('replaces the tab navigation with the learning journey for students', async () => {
     courseServiceMock.getCourseContext.mockResolvedValueOnce(
       courseContext(CourseRoles.STUDENT, {
         'course.content.read': true,
@@ -191,12 +195,18 @@ describe('ViewCourseOverview', () => {
     const wrapper = mountView()
     await flushPromises()
 
+    expect(wrapper.find('.student-journey').exists()).toBe(true)
+    expect(wrapper.text()).toContain('journey Webtechnologien Wintersemester 2026/27')
+    expect(wrapper.text()).not.toContain('kurs details')
+    expect(wrapper.text()).not.toContain('Aufgaben')
+    expect(wrapper.text()).not.toContain('Materialien')
     expect(wrapper.text()).not.toContain('Durchläufe')
     expect(wrapper.text()).not.toContain('Inhaltsversionen')
     expect(wrapper.text()).not.toContain('Audit')
+    expect(wrapper.find('.process-panel').exists()).toBe(false)
+    expect(wrapper.find('.materials-panel').exists()).toBe(false)
     expect(wrapper.find('.runs-panel').exists()).toBe(false)
     expect(wrapper.find('.audit-panel').exists()).toBe(false)
-    expect(wrapper.find('.materials-panel').text()).toContain('editable')
   })
 
   it('passes the selected historical run to content panels for teachers', async () => {
@@ -214,6 +224,7 @@ describe('ViewCourseOverview', () => {
     const wrapper = mountView()
     await flushPromises()
 
+    expect(wrapper.find('.student-journey').exists()).toBe(false)
     expect(wrapper.text()).toContain('Durchläufe')
     expect(wrapper.text()).toContain('Audit')
     expect(wrapper.text()).toContain('materials run-2 editable')

@@ -1,25 +1,23 @@
 # Learning Process
 
-Der lernfortschrittsabhaengige Lernprozess ist im bestehenden Course Service
-implementiert. Es gibt keinen separaten Task Service, keinen neuen Container und
-keinen direkten Zugriff auf Datenbanken anderer Services.
+Der lernfortschrittsabhaengige Lernprozess ist im Course Service
+implementiert. Vollstaendige Aufgabeninhalte liegen im separaten `task-service`.
+Der Course Service speichert nur kursbezogene Aufgabenreferenzen, Freischaltung,
+Fortschritt, Abgaben, Assessments und Bewertungen im Kurskontext.
 
 ## Datenmodell
 
-`Task` repraesentiert einen Lernschritt im Kurs:
+`Task` repraesentiert im Course Service eine Course-Task-Referenz:
 
 - `id`
 - `courseId`
 - `courseRunId`
 - `courseVersionId`
-- `title`
-- `description`
-- `type`
+- `externalTaskId`
 - `order`
 - `unlockMode`
 - `workMode`
 - `prerequisiteTaskId`
-- `completionCriteria`
 - `gradingMode`
 - `maxPoints`
 - `passThreshold`
@@ -109,19 +107,19 @@ automatische Folgeschritte freigeschaltet werden.
   anschliessend manuell als bestanden oder nicht bestanden und koennen Punkte
   sowie Feedback erfassen.
 - `AUTOMATIC_MOCK`: Studierende simulieren eine Abgabe. Der Course Service ruft
-  einen Mock-Evaluator ueber die `TaskEvaluationProvider`-Schnittstelle auf.
+  den `task-service` ueber `TaskServiceClient` auf.
 
 Die Aufgaben-Bestehensregel ist zentral in
-`apps/backend/src/task-assessment.rules.ts` abgelegt. Standardmaessig gilt:
+`apps/course-service/src/task-assessment.rules.ts` abgelegt. Standardmaessig gilt:
 50 Prozent oder mehr der maximalen Punkte bestehen die Aufgabe. Im aktuellen
 Mini-Projekt ist diese Aufgabenbewertung die zentrale aktive Bewertungsquelle.
 Ein spaeteres Kursergebnis muesste als eigene Aggregation aus
 `TaskAssessment`-Daten modelliert werden.
 
-Der Mock-Evaluator ist in `apps/backend/src/task-evaluation.provider.ts`
-gekapselt. Dadurch kann spaeter ein echter Aufgabenservice oder Object-/Code-
-Evaluator angebunden werden, ohne die Fortschritts- und Freischaltlogik im
-Course Service zu duplizieren.
+Die automatische Demo-Bewertung laeuft ueber den `task-service`. Der Course
+Service kapselt HTTP-Aufrufe in
+`apps/course-service/src/task-service.client.ts` und speichert Bewertung sowie
+Lernfortschritt weiterhin in seiner eigenen Datenbank.
 
 ## Freischaltmodi
 
@@ -257,17 +255,13 @@ Duplikate erzeugen. Produktive Migrationen erzeugen keine Demo-Daten.
 
 ## Integrationsgrenze Aufgabenservice
 
-Der Course Service erzeugt keinen hypothetischen externen Aufgabenservice und
-greift auf keine fremde Datenbank zu. Aufgabenabgaben und Bewertungen laufen
-derzeit intern ueber `TaskAssessment` und den `TaskEvaluationProvider`.
+Der Course Service greift nicht auf die Datenhaltung des Task Service zu.
+Aufgabeninhalte werden ausschliesslich ueber HTTP geladen oder geaendert.
+Die aktive Grenze ist API-basiert:
 
-Wenn spaeter ein echter Aufgabenservice angebunden wird, ist die Grenze
-API-basiert:
-
-- Der Course Service uebergibt Kursdurchlauf, Aufgabenreferenz, Studierenden-ID
-  und fachlich notwendige Abgabedaten.
-- Der externe Service liefert ein bewertetes Ergebnis oder einen
-  Bearbeitungsstatus zurueck.
+- Der Course Service uebergibt Kursdurchlauf, Course-Task-Referenz,
+  `externalTaskId`, Studierenden-ID und fachlich notwendige Abgabedaten.
+- Der Task Service liefert Aufgabeninhalte oder ein bewertetes Ergebnis zurueck.
 - Voruebergehende Nichterreichbarkeit wird als kontrollierter Fehler behandelt;
   Fortschritt wird dabei nicht als bestanden gespeichert.
 - Der Course Service speichert nur notwendige Ergebnisdaten, Referenzen,

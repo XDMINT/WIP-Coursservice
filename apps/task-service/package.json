@@ -1,0 +1,10 @@
+{
+  "name": "ewill-task-service",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal task content and mock evaluation service for the eWILL course service demo.",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test test/*.test.js"
+  }
+}

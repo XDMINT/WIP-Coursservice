@@ -50,8 +50,8 @@ Studentische Aktionen laufen ebenfalls ueber Aufgaben-Endpunkte und schreiben
 
 ## Mock-Bewertung
 
-Der Mock-Aufgabenservice ist ueber `TaskEvaluationProvider` gekapselt und
-schreibt normale `TaskAssessment`-Eintraege. Er erzeugt keine separate
+Der Mock-Aufgabenservice ist ueber `TaskServiceClient` gekapselt und schreibt
+normale `TaskAssessment`-Eintraege. Er erzeugt keine separate
 Bewertungsstruktur.
 
 ## Zukuenftige Gesamtnoten

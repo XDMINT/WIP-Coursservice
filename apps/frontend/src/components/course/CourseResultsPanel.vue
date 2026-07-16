@@ -159,6 +159,33 @@
             </div>
 
             <div
+              v-if="hasSubmission(row.assessment?.submissionData)"
+              class="assessment-row__submission"
+            >
+              <h4>Abgabe</h4>
+              <p v-if="submissionText(row.assessment?.submissionData)">
+                {{ submissionText(row.assessment?.submissionData) }}
+              </p>
+              <a
+                v-if="submissionLink(row.assessment?.submissionData)"
+                :href="submissionLink(row.assessment?.submissionData)"
+                rel="noopener"
+                target="_blank"
+              >
+                Abgabelink öffnen
+              </a>
+              <v-btn
+                v-if="row.assessment?.submissionData?.file"
+                prepend-icon="mdi-download-outline"
+                size="small"
+                variant="text"
+                @click="downloadSubmissionFile(row.assessment)"
+              >
+                {{ submissionFileLabel(row.assessment.submissionData) }}
+              </v-btn>
+            </div>
+
+            <div
               v-if="canEdit"
               class="assessment-row__actions"
             >
@@ -315,8 +342,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import learningTaskService, { TaskAssessmentStatus, TaskGradingMode, TaskProgressStatus, formatAssessmentStatus, formatGradingMode, formatTaskStatus, type LearningPath, type LearningTask, type StudentLearningTask, type StudentProgressOverview, type TaskAssessment } from '@/services/learningTask.service'
+import learningTaskService, { TaskAssessmentStatus, TaskGradingMode, TaskProgressStatus, formatAssessmentStatus, formatGradingMode, formatTaskStatus, type LearningPath, type LearningTask, type StudentLearningTask, type StudentProgressOverview, type TaskAssessment, type TaskSubmissionData } from '@/services/learningTask.service'
 import { getApiErrorMessage } from '@/services/apiErrors'
+import { formatLearningMaterialFileSize } from '@/services/learningMaterial.service'
 
 type AssessmentFilterStatus = TaskAssessmentStatus | 'NO_ASSESSMENT' | ''
 
@@ -579,6 +607,47 @@ const formatThreshold = (value?: number | null): string => {
   return `${formatPoints(value)} %`
 }
 
+const submissionText = (submissionData?: TaskSubmissionData | null): string =>
+  typeof submissionData?.text === 'string' ? submissionData.text : ''
+
+const submissionLink = (submissionData?: TaskSubmissionData | null): string =>
+  typeof submissionData?.link === 'string' ? submissionData.link : ''
+
+const submissionFileLabel = (submissionData?: TaskSubmissionData | null): string => {
+  const file = submissionData?.file
+
+  if (!file?.originalFileName) {
+    return 'Abgabedatei herunterladen'
+  }
+
+  return file.fileSize === undefined
+    ? file.originalFileName
+    : `${file.originalFileName} · ${formatLearningMaterialFileSize(file.fileSize)}`
+}
+
+const hasSubmission = (submissionData?: TaskSubmissionData | null): boolean =>
+  Boolean(submissionText(submissionData) || submissionLink(submissionData) || submissionData?.file)
+
+const downloadSubmissionFile = async (assessment?: TaskAssessment | null) => {
+  if (!assessment?.id) {
+    return
+  }
+
+  errorMessage.value = ''
+
+  try {
+    const blob = await learningTaskService.downloadTaskSubmissionFile(assessment.id)
+    const objectUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = assessment.submissionData?.file?.originalFileName ?? 'aufgabenabgabe'
+    anchor.click()
+    URL.revokeObjectURL(objectUrl)
+  } catch (error) {
+    errorMessage.value = getApiErrorMessage(error)
+  }
+}
+
 const getAssessmentColor = (row: AssessmentRow): string => {
   const status = row.assessment?.status
 
@@ -813,6 +882,30 @@ const resetAssessment = async (row: AssessmentRow) => {
     display: block;
     font-weight: 600;
     margin-top: 3px;
+  }
+}
+
+.assessment-row__submission {
+  border-left: 3px solid rgb(var(--v-theme-primary));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 12px;
+
+  h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  p {
+    color: rgb(var(--v-theme-on-surface-variant));
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  a {
+    overflow-wrap: anywhere;
   }
 }
 

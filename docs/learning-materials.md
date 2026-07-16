@@ -5,7 +5,7 @@ separate file service, MinIO, or direct public file path is introduced.
 
 ## Storage
 
-Uploaded files are stored outside PostgreSQL in the backend container at
+Uploaded files are stored outside PostgreSQL in the course-service container at
 `COURSE_MATERIAL_STORAGE_PATH`. Docker Compose mounts this path to the persistent
 `course-materials-data` volume.
 
@@ -18,7 +18,7 @@ Security properties:
 - File names are sanitized before being exposed as metadata.
 - Storage keys are generated server-side and are not derived from user input.
 - Path traversal in storage keys is rejected.
-- Downloads stream files through the authorized backend endpoint.
+- Downloads stream files through the authorized course-service endpoint.
 - Draft or archived files are never directly exposed to students.
 - Uploads are limited by `COURSE_MATERIAL_MAX_FILE_SIZE_BYTES`.
 
@@ -39,7 +39,7 @@ rejected.
 | Download file | Yes | Yes | Published only |
 
 The frontend uses permission flags for presentation, but all permissions are
-enforced by the backend.
+enforced by the course-service.
 
 ## API
 

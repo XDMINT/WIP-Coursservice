@@ -8,6 +8,7 @@ export default interface CoursePL {
   status?: string
   recurrenceType?: 'SEMESTER' | 'YEARLY' | 'CONTINUOUS'
   creationDate: string
+  updatedAt?: string
   semester: Semester
   owner: number
   keyPassword: string
@@ -20,6 +21,13 @@ export default interface CoursePL {
     endDate?: string
     status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
     isActive: boolean
+    enrollmentCount?: number
+    materialCount?: number
+    taskCount?: number
+    versionCount?: number
+    resultCount?: number
+    progressCount?: number
+    assignmentCount?: number
   }
   initialRunLabel?: string
   initialRunStartDate?: string

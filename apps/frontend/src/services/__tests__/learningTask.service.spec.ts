@@ -91,6 +91,51 @@ describe('learningTaskService', () => {
     expect(apiClient.post).toHaveBeenNthCalledWith(4, '/courses/course-id/runs/run-id/tasks/task-id/assessments/student-id/reset')
   })
 
+  it('submits task work with a file through multipart upload', async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({
+      data: {
+        tasks: []
+      }
+    })
+    const file = new File(['demo'], 'loesung.pdf', { type: 'application/pdf' })
+
+    await learningTaskService.submitTaskWithUpload('task-id', {
+      file,
+      keepExistingFile: true,
+      link: 'https://example.com/abgabe',
+      text: 'Meine Lösung'
+    })
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/courses/tasks/task-id/submit-upload',
+      expect.any(FormData),
+      expect.objectContaining({
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: expect.any(Function)
+      })
+    )
+
+    const formData = vi.mocked(apiClient.post).mock.calls[0][1] as FormData
+    expect(formData.get('text')).toBe('Meine Lösung')
+    expect(formData.get('link')).toBe('https://example.com/abgabe')
+    expect(formData.get('keepExistingFile')).toBe('true')
+    expect(formData.get('file')).toBe(file)
+  })
+
+  it('downloads submitted task files as blobs', async () => {
+    const blob = new Blob(['demo'])
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      data: blob
+    })
+
+    await expect(learningTaskService.downloadTaskSubmissionFile('assessment-id')).resolves.toBe(blob)
+    expect(apiClient.get).toHaveBeenCalledWith('/courses/task-assessments/assessment-id/submission-file', {
+      responseType: 'blob'
+    })
+  })
+
   it('unlocks manual tasks for a selected student', async () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       data: {

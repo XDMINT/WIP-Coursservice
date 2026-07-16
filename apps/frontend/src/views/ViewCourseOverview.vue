@@ -32,8 +32,17 @@
       </div>
     </div>
 
+    <StudentCourseJourneyView
+      v-if="showStudentJourney && !loading && !pageError"
+      :course-description="course?.description"
+      :course-id="courseId"
+      :course-name="courseName"
+      :course-run-id="courseRunIdForGroups"
+      :course-run-label="displayedRun?.label"
+    />
+
     <!-- Tab-System -->
-    <v-card v-if="!loading && !pageError" class="mt-4" variant="outlined">
+    <v-card v-else-if="!loading && !pageError" class="mt-4" variant="outlined">
       <v-tabs v-model="activeTab" color="primary">
         <v-tab value="details">
           <v-icon start> mdi-text-box-outline </v-icon>
@@ -217,6 +226,7 @@ import CourseResultsPanel from '@/components/course/CourseResultsPanel.vue'
 import CourseRunsPanel from '@/components/course/CourseRunsPanel.vue'
 import CourseVersionsPanel from '@/components/course/CourseVersionsPanel.vue'
 import AuditEventsPanel from '@/components/course/AuditEventsPanel.vue'
+import StudentCourseJourneyView from '@/components/course/StudentCourseJourneyView.vue'
 import type { CourseRun, CourseVersion } from '@/services/course.service'
 
 const route = useRoute()
@@ -251,6 +261,7 @@ const canReadResults = computed(() => permissions.value['course.results.own.read
 const canManageResults = computed(() => permissions.value['course.results.all.read'] === true)
 const canViewRunHistory = computed(() => canManageContent.value || canManageCourse.value)
 const canViewAudit = computed(() => canManageCourse.value)
+const showStudentJourney = computed(() => currentRole.value === CourseRoles.STUDENT)
 const displayedRun = computed(() => (canViewRunHistory.value ? (selectedRun.value ?? currentRun.value) : currentRun.value))
 const selectedRunIdForContent = computed(() => (canViewRunHistory.value ? displayedRun.value?.id : undefined))
 const displayedContentVersion = computed(() => {
@@ -312,6 +323,7 @@ const loadCourseContext = () => {
       }
       currentRole.value = context.role
       permissions.value = context.permissions
+      applyRequestedTab()
 
       if (context.role === CourseRoles.NONE) {
         router.push(route.path + '/signup')
@@ -355,6 +367,34 @@ const loadCourseContext = () => {
 // ── Tab-Steuerung ─────────────────────────────────────────────────────────────
 
 const activeTab = ref('details')
+
+const requestedTab = () => {
+  const tab = route.query?.tab
+
+  if (Array.isArray(tab)) return tab[0] ?? ''
+  return typeof tab === 'string' ? tab : ''
+}
+
+const isAllowedTab = (tab: string) => {
+  if (tab === 'bewertungen') return canReadResults.value
+  if (tab === 'mitglieder') return canManageMembers.value
+  if (tab === 'durchlaeufe' || tab === 'versionen') return canViewRunHistory.value
+  if (tab === 'audit') return canViewAudit.value
+
+  return ['details', 'aufgaben', 'materialien', 'gruppen'].includes(tab)
+}
+
+const applyRequestedTab = () => {
+  const tab = requestedTab()
+
+  if (tab && isAllowedTab(tab)) {
+    activeTab.value = tab
+  }
+}
+
+watch(() => route.query?.tab, () => {
+  applyRequestedTab()
+})
 
 watch(canViewRunHistory, (allowed) => {
   if (!allowed && (activeTab.value === 'durchlaeufe' || activeTab.value === 'versionen')) {

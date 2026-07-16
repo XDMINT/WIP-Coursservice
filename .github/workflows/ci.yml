@@ -32,12 +32,12 @@ jobs:
           npm run lint
           npm run build
 
-      - name: Install backend dependencies
-        working-directory: apps/backend
+      - name: Install course-service dependencies
+        working-directory: apps/course-service
         run: npm ci
 
-      - name: Verify backend
-        working-directory: apps/backend
+      - name: Verify course-service
+        working-directory: apps/course-service
         run: |
           npm run typecheck
           npm test -- --runInBand

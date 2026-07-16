@@ -90,7 +90,7 @@ The service calculates the next run from the course rhythm:
 currently selected content template. `POST /run-plan/template` stores the
 strategy for the next prepared run. The mini-project supports
 `ACTIVE_VERSION_OF_CURRENT_RUN` and `SPECIFIC_VERSION`; `EMPTY` is available in
-the backend for deliberately empty runs. If no specific version is configured,
+the course-service for deliberately empty runs. If no specific version is configured,
 the active content version of the current run is used.
 
 `POST /runs/special` is a controlled exception for administrative
@@ -99,9 +99,11 @@ The frontend labels this action separately from the regular rhythm-based
 planning.
 
 Copied content includes learning materials, file references, material metadata,
-tasks, task ordering, prerequisite links, task work mode, task grading rules and
-material release rules. Task and material records receive new ids, and task
-references are remapped to the copied tasks. Person-bound, group-bound or
+Course-Task-References, task ordering, prerequisite links, task work mode, task
+grading rules and material release rules. Task contents are copied through the
+Task Service API and referenced by `externalTaskId`. Reference and material
+records receive new ids, and task references are remapped to the copied tasks.
+Person-bound, group-bound or
 assessment data is not copied: enrollments, study groups, group memberships,
 task progress, group task progress, task assessments, grades, course results,
 assignments/submissions, individual unlocks and comments start empty for the

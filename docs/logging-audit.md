@@ -12,7 +12,7 @@ Logger nach stdout beziehungsweise stderr. Die Logs sind damit direkt ueber
 Docker sichtbar:
 
 ```bash
-docker compose logs backend
+docker compose logs course-service
 ```
 
 Geloggte technische Ereignisse:

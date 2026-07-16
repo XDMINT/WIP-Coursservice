@@ -37,7 +37,7 @@ services:
       DATABASE_NAME: "${GROUP_TASK_DB_NAME:-group_tasks}"
       DATABASE_USER: "${GROUP_TASK_DB_USER:-group_tasks}"
       DATABASE_PASSWORD: "${GROUP_TASK_DB_PASSWORD}"
-      COURSE_SERVICE_URL: "http://backend:3000"
+      COURSE_SERVICE_URL: "http://course-service:3000"
     depends_on:
       group-task-postgres:
         condition: service_healthy
@@ -89,7 +89,7 @@ networks:
 Der aktuelle Course Service ist im gemeinsamen Proxy-Netzwerk unter folgendem Docker-DNS-Namen erreichbar:
 
 ```env
-COURSE_SERVICE_URL=http://backend:3000
+COURSE_SERVICE_URL=http://course-service:3000
 ```
 
 Ein spaeterer Service darf intern ebenfalls Port `3000` oder `8080` verwenden. Das ist kein Konflikt, solange andere Container den Service ueber seinen Compose-Service-Namen ansprechen.

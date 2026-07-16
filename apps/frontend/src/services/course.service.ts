@@ -17,6 +17,8 @@ type BackendCourse = {
   recurrence_type?: CourseRecurrenceType
   created_at?: string
   createdAt?: string
+  updated_at?: string
+  updatedAt?: string
   owner_id?: number
   ownerId?: number
   key_password?: string
@@ -325,6 +327,7 @@ const mapCourseFromBackend = (course: BackendCourse): CoursePL => ({
   status: course.status,
   recurrenceType: course.recurrenceType ?? course.recurrence_type ?? 'CONTINUOUS',
   creationDate: course.created_at ?? course.createdAt ?? '',
+  updatedAt: course.updated_at ?? course.updatedAt ?? course.created_at ?? course.createdAt ?? '',
   semester: {
     id: 0,
     name: course.semester ?? 'Unbekanntes Semester',

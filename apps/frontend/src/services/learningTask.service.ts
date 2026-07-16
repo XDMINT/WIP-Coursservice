@@ -124,10 +124,24 @@ export type TaskAssessment = {
   passThreshold?: number | null
   passed?: boolean | null
   feedback?: string | null
+  submissionData?: TaskSubmissionData | null
   assessedBy?: string | null
   assessedAt?: string | null
   createdAt?: string
   updatedAt?: string
+}
+
+export type TaskSubmissionFile = {
+  originalFileName?: string
+  mimeType?: string
+  fileSize?: number
+  uploadedAt?: string
+}
+
+export type TaskSubmissionData = Record<string, unknown> & {
+  text?: string
+  link?: string
+  file?: TaskSubmissionFile
 }
 
 export type StudentTaskGroupContext = {
@@ -167,6 +181,13 @@ export type UpsertLearningTaskInput = {
   feedbackRequired?: boolean
   allowRetries?: boolean
   isPublished?: boolean
+}
+
+export type SubmitLearningTaskInput = {
+  file?: File | null
+  keepExistingFile?: boolean
+  link?: string
+  text?: string
 }
 
 class LearningTaskService {
@@ -223,8 +244,11 @@ class LearningTaskService {
     return response.data
   }
 
-  async submitTask(taskId: string, submissionData: Record<string, unknown> = {}): Promise<LearningPath> {
-    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/submit`, { submissionData })
+  async submitTask(taskId: string, submissionData: Record<string, unknown> = {}, options: { keepExistingFile?: boolean } = {}): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/submit`, {
+      ...(options.keepExistingFile ? { keepExistingFile: true } : {}),
+      submissionData
+    })
     return response.data
   }
 
@@ -233,8 +257,38 @@ class LearningTaskService {
     return response.data
   }
 
-  async submitGroupTask(taskId: string, submissionData: Record<string, unknown> = {}): Promise<LearningPath> {
-    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/group/submit`, { submissionData })
+  async submitGroupTask(taskId: string, submissionData: Record<string, unknown> = {}, options: { keepExistingFile?: boolean } = {}): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/group/submit`, {
+      ...(options.keepExistingFile ? { keepExistingFile: true } : {}),
+      submissionData
+    })
+    return response.data
+  }
+
+  async submitTaskWithUpload(taskId: string, input: SubmitLearningTaskInput, onProgress?: (percentage: number) => void): Promise<LearningPath> {
+    const response = await apiClient.post<LearningPath>(`/courses/tasks/${taskId}/submit-upload`, this.buildSubmissionFormData(input), {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      },
+      onUploadProgress: (event) => {
+        if (event.total != null && event.total > 0) {
+          onProgress?.(Math.round((event.loaded / event.total) * 100))
+        }
+      }
+    })
+
+    return response.data
+  }
+
+  async submitGroupTaskWithUpload(taskId: string, input: SubmitLearningTaskInput, onProgress?: (percentage: number) => void): Promise<LearningPath> {
+    return this.submitTaskWithUpload(taskId, input, onProgress)
+  }
+
+  async downloadTaskSubmissionFile(assessmentId: string): Promise<Blob> {
+    const response = await apiClient.get<Blob>(`/courses/task-assessments/${assessmentId}/submission-file`, {
+      responseType: 'blob'
+    })
+
     return response.data
   }
 
@@ -279,6 +333,28 @@ class LearningTaskService {
   async manuallyUnlockTask(taskId: string, studentId: string | number): Promise<StudentProgressOverview> {
     const response = await apiClient.post<StudentProgressOverview>(`/courses/tasks/${taskId}/manual-unlock`, { studentId })
     return response.data
+  }
+
+  private buildSubmissionFormData(input: SubmitLearningTaskInput): FormData {
+    const formData = new FormData()
+
+    if (input.text) {
+      formData.append('text', input.text)
+    }
+
+    if (input.link) {
+      formData.append('link', input.link)
+    }
+
+    if (input.keepExistingFile) {
+      formData.append('keepExistingFile', 'true')
+    }
+
+    if (input.file) {
+      formData.append('file', input.file)
+    }
+
+    return formData
   }
 }
 

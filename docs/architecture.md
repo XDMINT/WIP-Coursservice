@@ -11,17 +11,24 @@ Die Anwendung ist eine Docker-Compose-basierte, erweiterbare Servicearchitektur 
 ```text
 traefik
 frontend
-backend
-course-postgres
+course-service
+task-service
+course-db
 ```
 
-Das Backend bildet aktuell den Course Service und bleibt fachlich zusammen. Es wird nicht kuenstlich in weitere Services zerlegt. Weitere fachlich eigenstaendige Services koennen spaeter ueber zusaetzliche Compose-Dateien ergaenzt werden, wenn ihr fachlicher und betrieblicher Nutzen belegt ist.
+Der Course Service bildet die kursbezogene Fachdomaene. Der separate `task-service`
+ist bewusst klein; er verwaltet Aufgabeninhalte in einer eigenen Dateiablage und
+uebernimmt die deterministische Mock-Auswertung automatischer Demo-Aufgaben.
+Weitere fachlich eigenstaendige
+Services koennen spaeter ueber zusaetzliche Compose-Dateien ergaenzt werden, wenn
+ihr fachlicher und betrieblicher Nutzen belegt ist.
 
 ## Request-Fluss
 
 ```text
 Browser -> Traefik -> Frontend
-Browser -> Traefik -> Backend/Course Service -> Course PostgreSQL
+Browser -> Traefik -> Course Service -> Course PostgreSQL
+Course Service -> Task Service -> Task-Service-Volume
 ```
 
 Traefik routet `/api` und `/api/*` an den Course Service. Alle anderen Pfade werden an das Frontend weitergeleitet. Es wird kein `StripPrefix` verwendet, weil das Backend selbst den globalen Prefix `/api` setzt.
@@ -31,7 +38,8 @@ Fuer spaetere Services sind eigene externe Pfade vorgesehen, zum Beispiel `/api/
 ## Komponenten
 
 - Frontend: Vue/Vite-SPA, statisch durch Nginx im Container ausgeliefert.
-- Backend: aktueller Course Service als NestJS-Anwendung mit TypeORM, globalem `/api`-Prefix, Health-Endpunkt und zentraler Fehlerantwort.
+- Course Service: NestJS-Anwendung mit TypeORM, globalem `/api`-Prefix, Health-Endpunkt und zentraler Fehlerantwort.
+- Task Service: kleiner Node-Service fuer Aufgabeninhalte, CRUD-Endpunkte, `POST /api/tasks/evaluate` und `GET /api/health`.
 - Course PostgreSQL: relationale Datenbank des Course Service mit eigenem Volume und `pg_isready`-Healthcheck.
 - Traefik: technischer Edge Router mit Docker Provider, `exposedByDefault=false`
   und JSON-Access-Logs ohne Header.
@@ -42,32 +50,38 @@ Fuer spaetere Services sind eigene externe Pfade vorgesehen, zum Beispiel `/api/
 proxy-network:
   traefik
   frontend
-  backend
+  course-service
 
 course-internal:
-  backend
-  course-postgres
+  course-service
+  task-service
+  course-db
 ```
 
-`course-internal` ist als internes Docker-Netzwerk definiert. Course PostgreSQL ist nicht im Proxy-Netzwerk und veroeffentlicht keinen Host-Port. Frontend und Backend veroeffentlichen ebenfalls keine Host-Ports; nur Traefik veroeffentlicht `8080:80`.
+`course-internal` ist als internes Docker-Netzwerk definiert. Course PostgreSQL
+und Task Service sind nicht im Proxy-Netzwerk und veroeffentlichen keinen
+Host-Port. Frontend und Course Service veroeffentlichen ebenfalls keine
+Host-Ports; nur Traefik veroeffentlicht `8080:80`.
 
-Das Backend besitzt fuer Lernmaterial-Dateien zusaetzlich das persistente Volume
-`course-materials-data`. Dieses Volume ist kein eigener Service und wird nicht
-oeffentlich exponiert; Dateidownloads laufen ueber autorisierte Course-Service-
-Endpunkte.
+Der Course Service besitzt fuer Lernmaterial-Dateien zusaetzlich das persistente
+Volume `course-materials-data`. Der Task Service besitzt mit
+`task-service-data` ein eigenes Volume fuer seine Aufgabenablage. Beide Volumes
+werden nicht oeffentlich exponiert.
 
-Interne synchrone Kommunikation zwischen spaeteren Services soll direkt ueber Docker-DNS erfolgen, zum Beispiel `http://group-task-service:8080` oder `http://backend:3000`. Sie soll nicht unnoetig ueber Traefik laufen.
+Interne synchrone Kommunikation zwischen spaeteren Services soll direkt ueber Docker-DNS erfolgen, zum Beispiel `http://group-task-service:8080` oder `http://course-service:3000`. Sie soll nicht unnoetig ueber Traefik laufen.
 
-## Backend-Struktur
+## Course-Service-Struktur
 
-Der vorhandene fachliche Schwerpunkt ist Kursverwaltung. Die aktuelle Struktur vermeidet zusaetzliche Microservices und nutzt NestJS-Module:
+Der fachliche Schwerpunkt ist Kursverwaltung. Der Course Service nutzt NestJS-
+Module und kapselt die interne Fachlogik in kleinere Provider:
 
 ```text
-apps/backend/src/
+apps/course-service/src/
 ├── app.module.ts
 ├── courses.module.ts
 ├── courses.controller.ts
 ├── courses.service.ts
+├── domain/
 ├── courses.permissions.ts
 ├── dto/
 ├── entities/
@@ -76,15 +90,13 @@ apps/backend/src/
 └── common/
 ```
 
-Die groesste verbleibende Codequalitaetsgrenze ist `courses.service.ts`, der viele fachliche Unterbereiche enthaelt. Diese Unterbereiche sollten spaeter innerhalb desselben Backend-Prozesses in kleinere NestJS-Provider aufgeteilt werden, ohne Netzwerkkommunikation einzufuehren.
+`courses.service.ts` bleibt als Fassade fuer bestehende Controller- und Testschnittstellen bestehen. Fachlich abgegrenzte Unterbereiche liegen unter `domain/`.
 
-Der lernfortschrittsabhaengige Lernprozess nutzt die vorhandenen
-`Task`- und `TaskProgress`-Tabellen im Course Service. Weil der frueher geplante
-Group/Task Service aktuell nicht verfuegbar ist, stellt der Course Service fuer
-das Mini-Projekt eine kleine, klar abgegrenzte Aufgabenrepraesentation bereit.
-Ein spaeterer externer Task Service wuerde Ergebnisse ueber eine dokumentierte
-API melden; der Course Service bleibt fuer Fortschritt und Freischaltregeln
-verantwortlich.
+Der lernfortschrittsabhaengige Lernprozess nutzt im Course Service nur noch
+kursbezogene Task-Referenzen, `TaskProgress` und `TaskAssessment`. Vollstaendige
+Aufgabeninhalte liegen im Task Service und werden ueber `TaskServiceClient`
+geladen. Der Course Service kombiniert diese Inhalte mit Kursdurchlauf,
+Inhaltsversion, Freischaltregeln, Fortschritt und Bewertung im Kurskontext.
 
 Die einfache Gruppenarbeit der Mini-Version liegt ebenfalls bewusst im Course
 Service. Gruppen sind CourseRun-bezogen, werden von Lehrenden/Admins verwaltet
@@ -123,7 +135,7 @@ Ein spaeterer eigenstaendiger Service darf eine eigene PostgreSQL-Instanz, eigen
 
 Die Mini-Version nutzt keine externe zentrale Logging-Infrastruktur. Technische
 Backend-Logs und Request-Logs werden strukturiert ueber stdout/stderr
-ausgegeben und koennen mit `docker compose logs backend` gelesen werden. Jeder
+ausgegeben und koennen mit `docker compose logs course-service` gelesen werden. Jeder
 API-Request erhaelt eine `X-Request-ID`, die in Request-Logs, Fehlerlogs und
 Audit-Events verwendet wird.
 

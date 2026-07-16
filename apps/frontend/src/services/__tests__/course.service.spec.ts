@@ -41,6 +41,7 @@ describe('courseService', () => {
         active: true,
         recurrenceType: 'SEMESTER',
         creationDate: '',
+        updatedAt: '',
         semester: {
           id: 0,
           name: 'Summer 2026',

@@ -8,6 +8,7 @@ import { TaskAssessmentStatus, TaskGradingMode, TaskProgressStatus, TaskUnlockMo
 
 const learningTaskServiceMock = vi.hoisted(() => ({
   assessTaskManually: vi.fn(),
+  downloadTaskSubmissionFile: vi.fn(),
   getMyLearningPath: vi.fn(),
   getProgressOverview: vi.fn(),
   listTasks: vi.fn(),
@@ -136,6 +137,14 @@ const createProgressOverview = (): StudentProgressOverview[] => [
           points: null,
           status: TaskAssessmentStatus.PENDING_REVIEW,
           studentId: '3',
+          submissionData: {
+            file: {
+              fileSize: 2048,
+              originalFileName: 'loesung.pdf'
+            },
+            link: 'https://example.com/abgabe',
+            text: 'Meine Abgabe'
+          },
           taskId: 'task-2'
         },
         completionPercentage: 75,
@@ -305,6 +314,9 @@ describe('CourseResultsPanel', () => {
     expect(wrapper.text()).toContain('Aufgabenbewertungen')
     expect(wrapper.text()).toContain('Student 3')
     expect(wrapper.text()).toContain('Wartet auf Bewertung')
+    expect(wrapper.text()).toContain('Meine Abgabe')
+    expect(wrapper.text()).toContain('Abgabelink öffnen')
+    expect(wrapper.text()).toContain('loesung.pdf')
     expect(wrapper.text()).toContain('Bewerten')
     expect(wrapper.text()).not.toContain('Alle neu berechnen')
   })

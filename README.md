@@ -33,7 +33,8 @@ Traefik ist der einzige oeffentlich veroeffentlichte Compose-Service. Frontend, 
 .
 ├── apps/
 │   ├── frontend/          # Vue/Vite SPA
-│   └── backend/           # NestJS modularer Monolith
+│   ├── course-service/    # NestJS Course Service
+│   └── task-service/      # Mini Task Service mit eigener Aufgabenablage
 ├── api-contracts/         # vorhandene OpenAPI-Vertraege
 ├── docs/
 │   ├── architecture.md
@@ -88,7 +89,7 @@ Der Vite-Dev-Server laeuft standardmaessig auf Port `8085` und proxyt `/api` an 
 Backend:
 
 ```sh
-cd apps/backend
+cd apps/course-service
 npm install
 npm run start:dev
 ```
@@ -110,7 +111,7 @@ npm run build
 Backend:
 
 ```sh
-cd apps/backend
+cd apps/course-service
 npm run typecheck
 npm test -- --runInBand
 npm run test:e2e
@@ -128,7 +129,7 @@ docker compose ps
 
 ## Datenbankmigrationen
 
-Das Backend verwendet TypeORM-Migrationen und `synchronize: false`. Beim Compose-Start wird die Migration standardmaessig durch `DATABASE_MIGRATIONS_RUN=true` ausgefuehrt. Die aktuelle Initialmigration liegt unter `apps/backend/src/migrations/`.
+Der Course Service verwendet TypeORM-Migrationen und `synchronize: false`. Beim Compose-Start wird die Migration standardmaessig durch `DATABASE_MIGRATIONS_RUN=true` ausgefuehrt. Die aktuelle Initialmigration liegt unter `apps/course-service/src/migrations/`.
 
 PostgreSQL nutzt in Compose das benannte Volume `course-postgres-data`.
 Ein normales `docker compose restart` oder `docker compose down` mit
@@ -163,18 +164,19 @@ Details stehen in [docs/learning-materials.md](/Users/timguenther/Desktop/dev/WI
 
 ## Lernprozess
 
-Der Course Service verwaltet eine kleine Aufgabenrepraesentation fuer den
-lernfortschrittsabhaengigen Demo-Lernprozess. Aufgaben koennen sofort,
-automatisch nach erfolgreicher Voraussetzung oder manuell durch Lehrende
-freigeschaltet werden. Der aktuelle Demo-Abschluss nutzt dieselbe fachliche
-Service-Funktion, an die spaeter ein Bewertungssystem andocken kann.
+Der Course Service verwaltet nur die kursbezogene Aufgabenreferenz fuer den
+lernfortschrittsabhaengigen Demo-Lernprozess. Aufgabeninhalte liegen im
+`task-service`; Reihenfolge, Freischaltung, Arbeitsmodus, Fortschritt und
+Assessments bleiben im Course Service. Aufgaben koennen sofort, automatisch
+nach erfolgreicher Voraussetzung oder manuell durch Lehrende freigeschaltet
+werden.
 
 In `development`, `test` und `demo` wird ein deterministischer Demo-Kurs mit den
 drei Aufgaben `Grundlagen kennenlernen`, `Grundlagen anwenden` und
 `Abschlussaufgabe bearbeiten` idempotent angelegt. Der Seed kann mit
 `COURSE_DEMO_SEED_DISABLED=true` deaktiviert werden.
 Der Seed stellt nur fehlende Demo-Stammdaten sicher und ueberschreibt keine
-bestehenden Aufgaben- oder Fortschrittsdaten.
+bestehenden Fortschrittsdaten.
 
 Details stehen in [docs/learning-process.md](/Users/timguenther/Desktop/dev/WIP-Coursservice/docs/learning-process.md).
 
@@ -212,7 +214,7 @@ Traefik enthaelt keine Geschaeftslogik, keine fachliche Autorisierung und keine 
 
 ## Erweiterung um weitere Services
 
-Der aktuelle Kern bleibt in `compose.yaml`. Ein spaeterer fachlich eigenstaendiger Service, zum Beispiel ein Group/Task Service, kann ueber eine zusaetzliche Compose-Datei ergaenzt werden:
+Der aktuelle Kern bleibt in `compose.yaml`. Weitere fachlich eigenstaendige Services koennen ueber zusaetzliche Compose-Dateien ergaenzt werden:
 
 ```sh
 docker compose -f compose.yaml -f compose.group-task.yaml up --build
@@ -221,9 +223,9 @@ docker compose -f compose.yaml -f compose.group-task.yaml up --build
 Dabei gilt:
 
 - Der neue Service haengt am gemeinsamen `coursservice-proxy-network`.
-- Er bekommt ein eigenes internes Netzwerk und eine eigene PostgreSQL-Instanz.
+- Er bekommt ein eigenes internes Netzwerk und eine eigene Datenhaltung.
 - Seine Datenbank veroeffentlicht keinen Host-Port.
-- Interne Servicekommunikation laeuft direkt ueber Docker-DNS, zum Beispiel `http://backend:3000`.
+- Interne Servicekommunikation laeuft direkt ueber Docker-DNS, zum Beispiel `http://course-service:3000` und `http://task-service:3000`.
 - Gleiche interne Container-Ports sind erlaubt, weil Docker-Service-Namen die Adressierung trennen.
 
 Ein kompatibles Beispiel steht in [docs/service-integration.md](/Users/timguenther/Desktop/dev/WIP-Coursservice/docs/service-integration.md).
