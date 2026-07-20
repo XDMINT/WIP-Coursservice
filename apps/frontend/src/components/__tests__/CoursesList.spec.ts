@@ -264,7 +264,7 @@ describe('CoursesList', () => {
 
     expect(wrapper.text()).toContain('Eingeschriebener Kurs')
     expect(wrapper.text()).toContain('Weiterlernen')
-    expect(wrapper.text()).toContain('Nächster Schritt: Grundlagen anwenden')
+    expect(wrapper.text()).toContain('Bearbeite als Nächstes „Grundlagen anwenden“.')
     expect(wrapper.text()).toContain('1 von 2 Lernschritten abgeschlossen')
     expect(wrapper.text()).toContain('Neue Materialien verfügbar')
     expect(wrapper.text()).toContain('Feedback ansehen')

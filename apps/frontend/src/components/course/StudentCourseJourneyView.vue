@@ -35,6 +35,27 @@
         :progress="learningPath"
       />
 
+      <section
+        v-if="nextLearningAction"
+        class="next-learning-action"
+        aria-labelledby="next-learning-action-title"
+      >
+        <div class="next-learning-action__icon">
+          <v-icon size="24">
+            {{ nextLearningAction.icon }}
+          </v-icon>
+        </div>
+        <div>
+          <h2 id="next-learning-action-title">
+            Nächste sinnvolle Aktion
+          </h2>
+          <p>{{ nextLearningAction.message }}</p>
+          <span v-if="nextLearningAction.detail">
+            {{ nextLearningAction.detail }}
+          </span>
+        </div>
+      </section>
+
       <v-alert
         v-if="groupStatusMessage"
         density="comfortable"
@@ -82,6 +103,7 @@
             :key="task.id"
             :is-next="task.id === nextTask?.id"
             :materials="materialsForTask(task.id)"
+            :reflection="reflectionForTask(task)"
             :task="task"
             @open-material="openMaterial"
             @task-action="handleTaskAction"
@@ -195,7 +217,6 @@ import courseService, { type StudyGroup } from '@/services/course.service'
 import learningMaterialService, { LearningMaterialType, type LearningMaterial } from '@/services/learningMaterial.service'
 import learningTaskService, {
   TaskAssessmentStatus,
-  TaskGradingMode,
   TaskProgressStatus,
   TaskWorkMode,
   type LearningPath,
@@ -206,6 +227,7 @@ import { getApiErrorMessage } from '@/services/apiErrors'
 import JourneyMaterialList from './JourneyMaterialList.vue'
 import JourneyProgressSummary from './JourneyProgressSummary.vue'
 import LearningJourneyStepCard, { type JourneyTaskAction } from './LearningJourneyStepCard.vue'
+import { getLearningStepReflection, getNextLearningAction } from './getNextLearningAction'
 
 const props = defineProps<{
   courseDescription?: string
@@ -312,10 +334,14 @@ const nextTask = computed(() => {
   )
 })
 
+const nextLearningAction = computed(() =>
+  getNextLearningAction(studentTasks.value, materials.value)
+)
+
 const nextActionLabel = computed(() => {
   if (!nextTask.value) return ''
 
-  return actionHintForTask(nextTask.value)
+  return nextLearningAction.value.detail ?? nextLearningAction.value.message
 })
 
 const selectedSubmissionFile = computed(() => {
@@ -407,31 +433,8 @@ const loadData = async () => {
 
 const materialsForTask = (taskId: string): LearningMaterial[] => materialsByTaskId.value.get(taskId) ?? []
 
-const actionHintForTask = (task: StudentLearningTask): string => {
-  if (task.locked || task.status === TaskProgressStatus.LOCKED) {
-    return task.lockedReason || 'Dieser Schritt wird später freigeschaltet.'
-  }
-
-  if (task.status === TaskProgressStatus.SUBMITTED) {
-    return 'Deine Abgabe wartet auf Bewertung und kann noch bearbeitet werden.'
-  }
-
-  if (task.status === TaskProgressStatus.AVAILABLE || (task.status === TaskProgressStatus.FAILED && task.allowRetries)) {
-    if (task.gradingMode === TaskGradingMode.MANUAL) {
-      return 'Bearbeite und sende deine Abgabe, damit sie bewertet werden kann.'
-    }
-
-    return task.workMode === TaskWorkMode.GROUP ? 'Beginne die nächste Gruppenaufgabe.' : 'Starte den nächsten Lernschritt.'
-  }
-
-  if (task.status === TaskProgressStatus.IN_PROGRESS) {
-    if (task.gradingMode === TaskGradingMode.MANUAL) return 'Erfasse deine Abgabe, damit sie bewertet werden kann.'
-    if (task.gradingMode === TaskGradingMode.AUTOMATIC_MOCK) return 'Löse die Demo-Bewertung aus.'
-    return 'Markiere den Schritt als erledigt, sobald du fertig bist.'
-  }
-
-  return 'Prüfe diesen Lernschritt.'
-}
+const reflectionForTask = (task: StudentLearningTask) =>
+  getLearningStepReflection(task, studentTasks.value, materials.value)
 
 const handleTaskAction = async (action: JourneyTaskAction, task: StudentLearningTask) => {
   errorMessage.value = ''
@@ -595,6 +598,46 @@ const formatFileSize = (size: number): string => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.next-learning-action {
+  align-items: flex-start;
+  background: rgba(var(--v-theme-primary), 0.08);
+  border: 1px solid rgba(var(--v-theme-primary), 0.32);
+  border-radius: 8px;
+  display: flex;
+  gap: 14px;
+  padding: 16px;
+}
+
+.next-learning-action__icon {
+  align-items: center;
+  background: rgba(var(--v-theme-primary), 0.12);
+  border-radius: 8px;
+  color: rgb(var(--v-theme-primary));
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.next-learning-action h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.next-learning-action p {
+  font-size: 1.03rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.next-learning-action span {
+  color: rgb(var(--v-theme-on-surface-variant));
+  display: block;
+  margin-top: 4px;
 }
 
 .journey-section__heading {

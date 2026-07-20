@@ -132,6 +132,12 @@ import { AssessmentService } from './domain/assessment.service';
 import { LearningTaskService } from './domain/learning-task.service';
 import { LearningMaterialService } from './domain/learning-material.service';
 import { CourseRunVersionService } from './domain/course-run-version.service';
+import { AssignmentGradeService } from './domain/assignment-grade.service';
+import { CalendarEventService } from './domain/calendar-event.service';
+import { ContentReleaseTemplateService } from './domain/content-release-template.service';
+import { CourseCatalogService } from './domain/course-catalog.service';
+import { CourseSearchService } from './domain/course-search.service';
+import { LegacyWorkgroupService } from './domain/legacy-workgroup.service';
 import { AuditLogService } from './audit-log.service';
 import {
   AuditEventListQueryDto,
@@ -226,6 +232,12 @@ export class CoursesService {
   private readonly assessmentService = new AssessmentService(this as any);
   private readonly learningMaterialService = new LearningMaterialService(this as any).api;
   private readonly courseRunVersionService = new CourseRunVersionService(this as any).api;
+  private readonly courseCatalogService = new CourseCatalogService(this as any).api;
+  private readonly assignmentGradeService = new AssignmentGradeService(this as any).api;
+  private readonly contentReleaseTemplateService = new ContentReleaseTemplateService(this as any).api;
+  private readonly courseSearchService = new CourseSearchService(this as any).api;
+  private readonly legacyWorkgroupService = new LegacyWorkgroupService(this as any).api;
+  private readonly calendarEventService = new CalendarEventService(this as any).api;
 
   /**
    * Get hello message for testing
@@ -516,6 +528,30 @@ export class CoursesService {
         ? await this.mapCourseRunWithCounts(currentRun)
         : undefined,
     };
+  }
+
+  private delegateCourseCatalog(methodName: string, args: unknown[]): any {
+    return this.courseCatalogService[methodName](...args);
+  }
+
+  private delegateAssignmentGrade(methodName: string, args: unknown[]): any {
+    return this.assignmentGradeService[methodName](...args);
+  }
+
+  private delegateContentReleaseTemplate(methodName: string, args: unknown[]): any {
+    return this.contentReleaseTemplateService[methodName](...args);
+  }
+
+  private delegateCourseSearch(methodName: string, args: unknown[]): any {
+    return this.courseSearchService[methodName](...args);
+  }
+
+  private delegateLegacyWorkgroup(methodName: string, args: unknown[]): any {
+    return this.legacyWorkgroupService[methodName](...args);
+  }
+
+  private delegateCalendarEvent(methodName: string, args: unknown[]): any {
+    return this.calendarEventService[methodName](...args);
   }
 
   // Course run and content version methods are implemented in the domain service.
@@ -942,624 +978,68 @@ export class CoursesService {
     return numericPoints;
   }
 
-  async findAll(userId?: string | number): Promise<CourseResponseDto[]> {
-    if (userId === undefined || userId === null) {
-      const courses = await this.coursesRepository.find();
-      return courses.map(mapCourseToDto);
-    }
-
-    const coursesById = new Map<string, Course>();
-    const ownerId = this.toOptionalNumber(userId);
-
-    if (ownerId !== undefined) {
-      const ownedCourses = await this.coursesRepository.find({
-        where: { owner_id: ownerId },
-      });
-
-      ownedCourses.forEach((course) => coursesById.set(course.id, course));
-    }
-
-    const enrollments = await this.enrollmentRepository.find({
-      where: { userId: this.toUserId(userId) },
-      relations: ['course', 'courseRun'],
-    });
-
-    enrollments
-      .filter((enrollment) => enrollment.courseRun?.isActive === true)
-      .map((enrollment) => enrollment.course)
-      .filter(Boolean)
-      .forEach((course) => coursesById.set(course.id, course));
-
-    return Array.from(coursesById.values()).map(mapCourseToDto);
+  async findAll(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('findAll', args);
   }
 
-  async getAvailableCourses(
-    actorUserId?: string | number,
-  ): Promise<CourseCatalogItemResponseDto[]> {
-    const actorId = this.requireActorUserId(actorUserId);
-    const courses = await this.coursesRepository.find({
-      where: {
-        status: CourseStatus.PUBLISHED,
-      },
-      order: {
-        title: 'ASC',
-      },
-    });
-    const enrollments = await this.enrollmentRepository.find({
-      where: {
-        userId: actorId,
-      },
-      relations: ['courseRun'],
-    });
-    const enrollmentByCourseId = new Map(
-      enrollments
-        .filter((enrollment) => enrollment.courseRun?.isActive)
-        .map((enrollment) => [enrollment.courseId, enrollment]),
-    );
-    const ownerId = this.toOptionalNumber(actorId);
-    const result: CourseCatalogItemResponseDto[] = [];
-
-    for (const course of courses) {
-      if (enrollmentByCourseId.has(course.id)) {
-        continue;
-      }
-
-      if (ownerId !== undefined && course.owner_id === ownerId) {
-        continue;
-      }
-
-      const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
-
-      result.push(await this.mapCourseCatalogItemWithCounts(course, null, currentRun));
-    }
-
-    return result;
+  async getAvailableCourses(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('getAvailableCourses', args);
   }
 
-  async getEnrolledCourses(
-    actorUserId?: string | number,
-  ): Promise<CourseCatalogItemResponseDto[]> {
-    const actorId = this.requireActorUserId(actorUserId);
-    const coursesById = new Map<string, CourseCatalogItemResponseDto>();
-    const enrollments = await this.enrollmentRepository.find({
-      where: {
-        userId: actorId,
-      },
-      relations: ['course', 'courseRun'],
-    });
-
-    const activeEnrollments = enrollments
-      .filter((enrollment) => Boolean(enrollment.course))
-      .filter((enrollment) => enrollment.courseRun?.isActive === true);
-
-    for (const enrollment of activeEnrollments) {
-      coursesById.set(
-        enrollment.course.id,
-        await this.mapCourseCatalogItemWithCounts(
-          enrollment.course,
-          enrollment,
-          enrollment.courseRun,
-        ),
-      );
-    }
-
-    const ownerId = this.toOptionalNumber(actorId);
-
-    if (ownerId !== undefined) {
-      const ownedCourses = await this.coursesRepository.find({
-        where: {
-          owner_id: ownerId,
-        },
-        order: {
-          title: 'ASC',
-        },
-      });
-
-      for (const course of ownedCourses) {
-        if (!coursesById.has(course.id)) {
-          const currentRun = await this.getCurrentCourseRunOrCreate(course.id);
-          const teacherEnrollment = new Enrollment();
-          teacherEnrollment.courseId = course.id;
-          teacherEnrollment.course = course;
-          teacherEnrollment.courseRunId = currentRun.id;
-          teacherEnrollment.courseRun = currentRun;
-          teacherEnrollment.userId = actorId;
-          teacherEnrollment.role = CourseMemberRole.TEACHER;
-          coursesById.set(
-            course.id,
-            await this.mapCourseCatalogItemWithCounts(course, teacherEnrollment, currentRun),
-          );
-        }
-      }
-    }
-
-    return Array.from(coursesById.values()).sort((left, right) =>
-      left.title.localeCompare(right.title),
-    );
+  async getEnrolledCourses(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('getEnrolledCourses', args);
   }
 
-  async findOne(id: string | number): Promise<CourseResponseDto> {
-    const course = await this.coursesRepository.findOne({
-      where: { id: this.toCourseId(id) },
-      relations: ['versions', 'enrollments', 'groups'],
-    });
-
-    if (!course) {
-      throw new ApiNotFoundError('Course not found');
-    }
-
-    return mapCourseToDto(course);
+  async findOne(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('findOne', args);
   }
 
-  async getUserRoleInCourse(
-    courseId: string | number,
-    userId: string | number,
-  ): Promise<CourseMemberRole | null> {
-    await this.findCourseOrThrow(courseId);
-    return this.resolveCourseRole(courseId, userId);
+  async getUserRoleInCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('getUserRoleInCourse', args);
   }
 
-  async getCourseContext(
-    courseId: string | number,
-    actorUserId?: string | number,
-  ): Promise<CourseContextResponseDto> {
-    const actorId = this.requireActorUserId(actorUserId);
-    const course = await this.findCourseOrThrow(courseId);
-    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
-    const role = await this.resolveCourseRole(courseId, actorId);
-
-    if (!hasCoursePermission(role, CoursePermission.ReadCourseContent)) {
-      throw new ApiForbiddenError(
-        'You are not enrolled in this course',
-        'COURSE_ACCESS_DENIED',
-      );
-    }
-
-    if (role === CourseMemberRole.STUDENT && course.status !== CourseStatus.PUBLISHED) {
-      throw new ApiForbiddenError(
-        'Course content is not released for students',
-        'COURSE_ACCESS_DENIED',
-      );
-    }
-
-    const currentVersion = await this.getActiveCourseVersionForRunOrThrow(
-      course.id,
-      currentRun.id,
-    );
-
-    return mapCourseContextToDto(course, actorId, role, currentRun, currentVersion);
+  async getCourseContext(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('getCourseContext', args);
   }
 
-  async getCourseMembers(
-    courseId: string | number,
-    actorUserId?: string | number,
-  ): Promise<EnrollmentResponseDto[]> {
-    await this.assertCoursePermission(
-      courseId,
-      actorUserId,
-      CoursePermission.ManageMembers,
-    );
-
-    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
-    const enrollments = await this.enrollmentRepository.find({
-      where: {
-        courseId: this.toCourseId(courseId),
-        courseRunId: currentRun.id,
-      },
-    });
-
-    return enrollments.map(mapEnrollmentToDto);
+  async getCourseMembers(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('getCourseMembers', args);
   }
 
-  async getCourseMembersByRun(
-    courseId: string | number,
-    runId: string,
-    actorUserId?: string | number,
-  ): Promise<EnrollmentResponseDto[]> {
-    const run = await this.assertCourseRunManageable(courseId, runId, actorUserId);
-    const enrollments = await this.enrollmentRepository.find({
-      where: {
-        courseId: this.toCourseId(courseId),
-        courseRunId: run.id,
-      },
-    });
-
-    return enrollments.map(mapEnrollmentToDto);
+  async getCourseMembersByRun(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('getCourseMembersByRun', args);
   }
 
-  async listAuditEvents(
-    courseId: string | number,
-    query: AuditEventListQueryDto = {},
-    actorUserId?: string | number,
-  ): Promise<AuditEventResponseDto[]> {
-    if (!this.auditLogService) {
-      return [];
-    }
-
-    const normalizedCourseId = this.toCourseId(courseId);
-    const actorId = this.requireActorUserId(actorUserId);
-    await this.assertCoursePermission(
-      normalizedCourseId,
-      actorId,
-      CoursePermission.ManageCourse,
-    );
-
-    if (query.courseRunId) {
-      await this.assertCourseRunManageable(
-        normalizedCourseId,
-        query.courseRunId,
-        actorId,
-      );
-    }
-
-    const events = await this.auditLogService.listEvents({
-      courseId: normalizedCourseId,
-      courseRunId: query.courseRunId,
-      eventType: query.eventType,
-      from: this.parseAuditDate(query.from, 'from'),
-      to: this.parseAuditDate(query.to, 'to'),
-      limit: this.parseAuditLimit(query.limit),
-    });
-
-    return events.map(mapAuditEventToDto);
+  async listAuditEvents(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('listAuditEvents', args);
   }
 
-  async createCourse(
-    body: any,
-    actorUserId?: string | number,
-  ): Promise<CourseResponseDto> {
-    body = body ?? {};
-
-    const course = new Course();
-    const actorId = actorUserId !== undefined ? this.toUserId(actorUserId) : undefined;
-    const ownerId = this.toOptionalNumber(
-      body.owner_id ?? body.ownerId ?? actorId ?? body.userId,
-    );
-    const status = this.normalizeCourseStatus(body.status);
-    const recurrenceType = this.normalizeRecurrenceType(
-      body.recurrenceType ?? body.recurrence_type,
-    );
-
-    course.external_id =
-      body.external_id ?? body.externalId ?? this.createExternalCourseId();
-    course.title = this.requireCourseTitle(body.title);
-    course.description = body.description;
-    course.semester = body.semester;
-    course.recurrenceType = recurrenceType;
-    course.status = status ?? CourseStatus.DRAFT;
-    course.location = body.location;
-    course.key_password = body.key_password ?? body.keyPassword;
-    course.owner_id = ownerId;
-    course.created_by = actorId ?? ownerId?.toString();
-    course.updated_by = actorId ?? ownerId?.toString();
-
-    const savedCourse = await this.coursesRepository.save(course);
-    const initialRun = await this.createInitialCourseRun(savedCourse, actorId, body);
-    const initialVersion = await this.createInitialContentVersionForRun(
-      savedCourse,
-      initialRun,
-      actorId ?? savedCourse.created_by ?? 'system',
-      `Initiale Inhaltsversion fuer ${initialRun.label}`,
-    );
-
-    if (ownerId !== undefined) {
-      const existingEnrollment = await this.findCourseEnrollment(
-        savedCourse.id,
-        ownerId,
-        initialRun.id,
-      );
-
-      if (!existingEnrollment) {
-        const enrollment = new Enrollment();
-        enrollment.courseId = savedCourse.id;
-        enrollment.course = savedCourse;
-        enrollment.courseRunId = initialRun.id;
-        enrollment.courseRun = initialRun;
-        enrollment.userId = this.toUserId(ownerId);
-        enrollment.role = CourseMemberRole.TEACHER;
-        enrollment.createdBy = actorId ?? this.toUserId(ownerId);
-        enrollment.updatedBy = actorId ?? this.toUserId(ownerId);
-
-        await this.enrollmentRepository.save(enrollment);
-      }
-    }
-
-    await this.recordAuditEvent({
-      eventType: AuditEventType.COURSE_CREATED,
-      actorUserId: actorId ?? ownerId?.toString(),
-      actorRole: CourseMemberRole.TEACHER,
-      courseId: savedCourse.id,
-      entityType: 'course',
-      entityId: savedCourse.id,
-      summary: `Kurs erstellt: ${savedCourse.title}`,
-      metadataJson: {
-        status: savedCourse.status,
-        recurrenceType: savedCourse.recurrenceType,
-      },
-    });
-    await this.recordAuditEvent({
-      eventType: AuditEventType.COURSE_RUN_CREATED,
-      actorUserId: actorId ?? ownerId?.toString(),
-      actorRole: CourseMemberRole.TEACHER,
-      courseId: savedCourse.id,
-      courseRunId: initialRun.id,
-      entityType: 'course_run',
-      entityId: initialRun.id,
-      summary: `Initialer Kursdurchlauf erstellt: ${initialRun.label}`,
-      metadataJson: {
-        status: initialRun.status,
-        active: initialRun.isActive,
-      },
-    });
-    await this.recordAuditEvent({
-      eventType: AuditEventType.CONTENT_VERSION_CREATED,
-      actorUserId: actorId ?? ownerId?.toString(),
-      actorRole: CourseMemberRole.TEACHER,
-      courseId: savedCourse.id,
-      courseRunId: initialRun.id,
-      courseVersionId: initialVersion.id,
-      entityType: 'course_version',
-      entityId: initialVersion.id,
-      summary: `Initiale Inhaltsversion erstellt: ${initialVersion.label}`,
-      metadataJson: {
-        versionNumber: initialVersion.version_number,
-        active: initialVersion.is_active,
-      },
-    });
-
-    return mapCourseToDto(savedCourse);
+  async createCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('createCourse', args);
   }
 
-  async joinCourse(
-    courseId: string | number,
-    userId: string | number,
-    key?: string,
-  ): Promise<EnrollmentResponseDto> {
-    return this.enrollInCourse(courseId, userId, key);
+  async joinCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('joinCourse', args);
   }
 
-  async enrollInCourse(
-    courseId: string | number,
-    actorUserId?: string | number,
-    key?: string,
-  ): Promise<EnrollmentResponseDto> {
-    const actorId = this.requireActorUserId(actorUserId);
-    const normalizedCourseId = this.toCourseId(courseId);
-    const course = await this.coursesRepository.findOne({
-      where: { id: normalizedCourseId },
-    });
-
-    if (!course) {
-      throw new ApiNotFoundError('Course not found');
-    }
-
-    if (course.status !== CourseStatus.PUBLISHED) {
-      throw new ApiForbiddenError(
-        'Only published courses can be joined',
-        'COURSE_ACCESS_DENIED',
-      );
-    }
-
-    if (course.key_password && course.key_password !== key) {
-      throw new ApiForbiddenError('Invalid course key', 'COURSE_ACCESS_DENIED');
-    }
-
-    const currentRun = await this.getCurrentCourseRunOrCreate(normalizedCourseId);
-    const existingEnrollment = await this.findCourseEnrollment(
-      normalizedCourseId,
-      actorId,
-      currentRun.id,
-    );
-
-    if (existingEnrollment) {
-      if (existingEnrollment.role !== CourseMemberRole.STUDENT) {
-        throw new ApiForbiddenError(
-          'Teaching roles cannot be enrolled as students',
-          'COURSE_ACCESS_DENIED',
-        );
-      }
-
-      return mapEnrollmentToDto(existingEnrollment);
-    }
-
-    const ownerId = this.toOptionalNumber(actorId);
-
-    if (ownerId !== undefined && course.owner_id === ownerId) {
-      throw new ApiForbiddenError(
-        'Course owners cannot be enrolled as students',
-        'COURSE_ACCESS_DENIED',
-      );
-    }
-
-    const enrollment = new Enrollment();
-    enrollment.courseId = normalizedCourseId;
-    enrollment.course = course;
-    enrollment.courseRunId = currentRun.id;
-    enrollment.courseRun = currentRun;
-    enrollment.userId = actorId;
-    enrollment.role = CourseMemberRole.STUDENT;
-    enrollment.createdBy = actorId;
-    enrollment.updatedBy = actorId;
-
-    const savedEnrollment = await this.enrollmentRepository.save(enrollment);
-    await this.initializeImmediateTaskProgressForEnrollment(
-      normalizedCourseId,
-      savedEnrollment,
-      actorId,
-    );
-    await this.recordAuditEvent({
-      eventType: AuditEventType.STUDENT_ENROLLED,
-      actorUserId: actorId,
-      actorRole: CourseMemberRole.STUDENT,
-      courseId: normalizedCourseId,
-      courseRunId: currentRun.id,
-      entityType: 'enrollment',
-      entityId: savedEnrollment.id,
-      summary: `Student eingeschrieben: ${actorId}`,
-      metadataJson: {
-        studentId: actorId,
-      },
-    });
-
-    return mapEnrollmentToDto(savedEnrollment);
+  async enrollInCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('enrollInCourse', args);
   }
 
-  async leaveCourse(
-    courseId: string | number,
-    userId?: string | number,
-    actorUserId?: string | number,
-  ): Promise<void> {
-    if (userId === undefined || userId === null) {
-      throw new ApiValidationError('User ID is required to leave a course');
-    }
-
-    const actorId = this.requireActorUserId(actorUserId ?? userId);
-    const normalizedUserId = this.toUserId(userId);
-
-    if (actorId !== normalizedUserId) {
-      await this.assertCoursePermission(
-        courseId,
-        actorId,
-        CoursePermission.ManageMembers,
-      );
-    }
-
-    const result = await this.enrollmentRepository.delete({
-      courseId: this.toCourseId(courseId),
-      courseRunId: (await this.getCurrentCourseRunOrCreate(courseId)).id,
-      userId: normalizedUserId,
-    });
-
-    if ((result.affected ?? 0) > 0) {
-      await this.recordAuditEvent({
-        eventType: AuditEventType.STUDENT_REMOVED,
-        actorUserId: actorId,
-        courseId,
-        entityType: 'enrollment',
-        entityId: normalizedUserId,
-        summary: `Student aus Kurs entfernt: ${normalizedUserId}`,
-        metadataJson: {
-          studentId: normalizedUserId,
-        },
-      });
-    }
+  async leaveCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('leaveCourse', args);
   }
 
-  async updateCourse(
-    id: string | number,
-    body: any,
-    actorUserId?: string | number,
-  ): Promise<CourseResponseDto> {
-    body = body ?? {};
-    const actorId = this.requireActorUserId(actorUserId);
-    await this.assertCoursePermission(id, actorId, CoursePermission.ManageCourse);
-
-    const course = await this.coursesRepository.findOne({
-      where: { id: this.toCourseId(id) },
-    });
-
-    if (!course) {
-      throw new ApiNotFoundError('Course not found');
-    }
-
-    const status = this.normalizeCourseStatus(body.status);
-    const ownerId = this.toOptionalNumber(body.owner_id ?? body.ownerId);
-
-    if (body.external_id !== undefined || body.externalId !== undefined) {
-      course.external_id = body.external_id ?? body.externalId;
-    }
-
-    if (body.title !== undefined) {
-      course.title = this.requireCourseTitle(body.title);
-    }
-
-    if (body.description !== undefined) {
-      course.description = body.description;
-    }
-
-    if (body.semester !== undefined) {
-      course.semester = body.semester;
-    }
-
-    if (body.recurrenceType !== undefined || body.recurrence_type !== undefined) {
-      course.recurrenceType = this.normalizeRecurrenceType(
-        body.recurrenceType ?? body.recurrence_type,
-      );
-    }
-
-    if (status !== undefined) {
-      course.status = status;
-    }
-
-    if (body.location !== undefined) {
-      course.location = body.location;
-    }
-
-    if (body.key_password !== undefined || body.keyPassword !== undefined) {
-      course.key_password = body.key_password ?? body.keyPassword;
-    }
-
-    if (ownerId !== undefined) {
-      course.owner_id = ownerId;
-    }
-
-    course.updated_by = actorId;
-
-    const savedCourse = await this.coursesRepository.save(course);
-    await this.recordAuditEvent({
-      eventType: AuditEventType.COURSE_UPDATED,
-      actorUserId: actorId,
-      courseId: savedCourse.id,
-      entityType: 'course',
-      entityId: savedCourse.id,
-      summary: `Kurs aktualisiert: ${savedCourse.title}`,
-      metadataJson: {
-        status: savedCourse.status,
-        recurrenceType: savedCourse.recurrenceType,
-      },
-    });
-
-    return mapCourseToDto(savedCourse);
+  async updateCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('updateCourse', args);
   }
 
-  async changeUserRole(
-    courseId: string | number,
-    userId: string | number,
-    role: string,
-    actorUserId?: string | number,
-  ): Promise<EnrollmentResponseDto> {
-    const normalizedCourseId = this.toCourseId(courseId);
-    const actorId = this.requireActorUserId(actorUserId);
-    await this.assertCoursePermission(
-      normalizedCourseId,
-      actorId,
-      CoursePermission.ManageMembers,
-    );
-    const enrollment = await this.findCourseEnrollment(
-      normalizedCourseId,
-      userId,
-    );
-
-    if (!enrollment) {
-      throw new ApiNotFoundError('Enrollment not found');
-    }
-
-    enrollment.role = this.normalizeCourseRole(role);
-    enrollment.updatedBy = actorId;
-
-    return mapEnrollmentToDto(await this.enrollmentRepository.save(enrollment));
+  async changeUserRole(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('changeUserRole', args);
   }
 
-  async removeCourse(
-    id: string | number,
-    actorUserId?: string | number,
-  ): Promise<void> {
-    await this.assertCoursePermission(id, actorUserId, CoursePermission.ManageCourse);
-    const result = await this.coursesRepository.delete(this.toCourseId(id));
-
-    if (result.affected === 0) {
-      throw new ApiNotFoundError('Course not found');
-    }
+  async removeCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseCatalog('removeCourse', args);
   }
 
   async createLearningMaterial(...args: any[]): Promise<any> {
@@ -1663,311 +1143,65 @@ export class CoursesService {
   }
 
   // Assignment methods
-  async createAssignment(
-    courseId: string,
-    title: string,
-    description: string,
-    type: string,
-    maxPoints: number,
-    weight: number,
-    dueDate: Date,
-    createdBy: string,
-  ): Promise<Assignment> {
-    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
-    const assignment = new Assignment();
-    assignment.title = title;
-    assignment.description = description;
-    assignment.type = type;
-    assignment.maxPoints = maxPoints;
-    assignment.weight = weight;
-    assignment.dueDate = dueDate;
-    assignment.createdBy = createdBy;
-    assignment.updatedBy = createdBy;
-    assignment.isPublished = false;
-    assignment.isGraded = false;
-
-    // Set the course relation
-    const course = new Course();
-    course.id = courseId;
-    assignment.course = course;
-    assignment.courseRunId = currentRun.id;
-    assignment.courseRun = currentRun;
-
-    return this.assignmentRepository.save(assignment);
+  async createAssignment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('createAssignment', args);
   }
 
-  async getAssignmentsByCourse(courseId: string): Promise<Assignment[]> {
-    const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
-
-    return this.assignmentRepository.find({
-      where: {
-        course: { id: courseId },
-        courseRunId: currentRun.id,
-      },
-      relations: ['grades'],
-    });
+  async getAssignmentsByCourse(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('getAssignmentsByCourse', args);
   }
 
-  async getAssignmentById(id: string): Promise<Assignment> {
-    return this.assignmentRepository.findOne({
-      where: { id },
-      relations: ['grades'],
-    });
+  async getAssignmentById(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('getAssignmentById', args);
   }
 
-  async updateAssignment(
-    id: string,
-    title: string,
-    description: string,
-    type: string,
-    maxPoints: number,
-    weight: number,
-    dueDate: Date,
-    isPublished: boolean,
-    isGraded: boolean,
-    updatedBy: string,
-  ): Promise<Assignment> {
-    const assignment = await this.assignmentRepository.findOne({
-      where: { id },
-    });
-
-    if (!assignment) {
-      throw new Error('Assignment not found');
-    }
-
-    assignment.title = title;
-    assignment.description = description;
-    assignment.type = type;
-    assignment.maxPoints = maxPoints;
-    assignment.weight = weight;
-    assignment.dueDate = dueDate;
-    assignment.isPublished = isPublished;
-    assignment.isGraded = isGraded;
-    assignment.updatedBy = updatedBy;
-
-    return this.assignmentRepository.save(assignment);
+  async updateAssignment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('updateAssignment', args);
   }
 
-  async deleteAssignment(id: string): Promise<void> {
-    await this.assignmentRepository.delete(id);
+  async deleteAssignment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('deleteAssignment', args);
   }
 
-  async publishAssignment(id: string, updatedBy: string): Promise<Assignment> {
-    const assignment = await this.assignmentRepository.findOne({
-      where: { id },
-    });
-
-    if (!assignment) {
-      throw new Error('Assignment not found');
-    }
-
-    assignment.isPublished = true;
-    assignment.updatedBy = updatedBy;
-
-    return this.assignmentRepository.save(assignment);
+  async publishAssignment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('publishAssignment', args);
   }
 
-  async unpublishAssignment(id: string, updatedBy: string): Promise<Assignment> {
-    const assignment = await this.assignmentRepository.findOne({
-      where: { id },
-    });
-
-    if (!assignment) {
-      throw new Error('Assignment not found');
-    }
-
-    assignment.isPublished = false;
-    assignment.updatedBy = updatedBy;
-
-    return this.assignmentRepository.save(assignment);
+  async unpublishAssignment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('unpublishAssignment', args);
   }
 
   // Grade methods
-  async createGrade(
-    assignmentId: string,
-    enrollmentId: string,
-    pointsAchieved: number,
-    feedback: string,
-    gradedBy: string,
-    isFinal: boolean,
-  ): Promise<Grade> {
-    const assignment = await this.assignmentRepository.findOne({
-      where: { id: assignmentId },
-    });
-
-    if (!assignment) {
-      throw new ApiNotFoundError('Assignment not found');
-    }
-
-    this.ensureValidAutomaticGradePoints(
-      pointsAchieved,
-      this.ensureValidAssignmentMaxPoints(assignment),
-    );
-
-    const grade = new Grade();
-    grade.pointsAchieved = pointsAchieved;
-    grade.feedback = feedback;
-    grade.gradedBy = gradedBy;
-    grade.gradedAt = new Date();
-    grade.isFinal = isFinal;
-    grade.updatedBy = gradedBy;
-
-    grade.assignment = assignment;
-
-    // Set the enrollment relation
-    const enrollment = new Enrollment();
-    enrollment.id = enrollmentId;
-    grade.enrollment = enrollment;
-
-    return this.gradeRepository.save(grade);
+  async createGrade(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('createGrade', args);
   }
 
-  async getGradesByAssignment(assignmentId: string): Promise<Grade[]> {
-    return this.gradeRepository.find({
-      where: { assignment: { id: assignmentId } },
-      relations: ['enrollment', 'assignment'],
-    });
+  async getGradesByAssignment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('getGradesByAssignment', args);
   }
 
-  async getGradesByEnrollment(enrollmentId: string): Promise<Grade[]> {
-    return this.gradeRepository.find({
-      where: { enrollment: { id: enrollmentId } },
-      relations: ['assignment'],
-    });
+  async getGradesByEnrollment(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('getGradesByEnrollment', args);
   }
 
-  async getGradeById(id: string): Promise<Grade> {
-    return this.gradeRepository.findOne({
-      where: { id },
-      relations: ['enrollment', 'assignment'],
-    });
+  async getGradeById(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('getGradeById', args);
   }
 
-  async updateGrade(
-    id: string,
-    pointsAchieved: number,
-    feedback: string,
-    gradedBy: string,
-    isFinal: boolean,
-    updatedBy: string,
-  ): Promise<Grade> {
-    const grade = await this.gradeRepository.findOne({
-      where: { id },
-      relations: ['assignment'],
-    });
-
-    if (!grade) {
-      throw new ApiNotFoundError('Grade not found');
-    }
-
-    const assignment = grade.assignment
-      ? grade.assignment
-      : await this.assignmentRepository.findOne({
-          where: { id: (grade as any).assignmentId },
-        });
-
-    if (!assignment) {
-      throw new ApiNotFoundError('Assignment not found');
-    }
-
-    this.ensureValidAutomaticGradePoints(
-      pointsAchieved,
-      this.ensureValidAssignmentMaxPoints(assignment),
-    );
-
-    grade.pointsAchieved = pointsAchieved;
-    grade.feedback = feedback;
-    grade.gradedBy = gradedBy;
-    grade.gradedAt = new Date();
-    grade.isFinal = isFinal;
-    grade.updatedBy = updatedBy;
-
-    return this.gradeRepository.save(grade);
+  async updateGrade(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('updateGrade', args);
   }
 
-  async deleteGrade(id: string): Promise<void> {
-    await this.gradeRepository.delete(id);
+  async deleteGrade(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('deleteGrade', args);
   }
 
-  async calculateCourseGrade(courseId: string, enrollmentId: string): Promise<{ grade: number; passed: boolean }> {
-    // Get all assignments for the course
-    const assignments = await this.assignmentRepository.find({
-      where: { course: { id: courseId }, isGraded: true },
-    });
-
-    if (assignments.length === 0) {
-      throw new Error('No graded assignments found for this course');
-    }
-
-    // Get all grades for the enrollment
-    const grades = await this.gradeRepository.find({
-      where: { enrollment: { id: enrollmentId } },
-      relations: ['assignment'],
-    });
-
-    let totalWeightedScore = 0;
-    let totalWeight = 0;
-
-    for (const assignment of assignments) {
-      const grade = grades.find(g => g.assignment.id === assignment.id);
-
-      if (grade && grade.isFinal) {
-        const maxPoints = this.ensureValidAssignmentMaxPoints(assignment);
-
-        if (maxPoints === 0) {
-          continue;
-        }
-
-        const pointsAchieved = this.ensureValidAutomaticGradePoints(
-          grade.pointsAchieved,
-          maxPoints,
-        );
-        const percentage = pointsAchieved / maxPoints;
-        totalWeightedScore += percentage * assignment.weight;
-        totalWeight += assignment.weight;
-      }
-    }
-
-    if (totalWeight === 0) {
-      throw new Error('No valid grades found for calculation');
-    }
-
-    const finalGrade = totalWeightedScore / totalWeight;
-    const passed =
-      calculateCoursePassStatus(finalGrade * 100) === CoursePassStatus.PASSED;
-
-    return { grade: finalGrade, passed };
+  async calculateCourseGrade(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('calculateCourseGrade', args);
   }
 
-  async getCoursePerformance(courseId: string): Promise<any> {
-    // Get all enrollments for the course
-    const enrollments = await this.enrollmentRepository.find({
-      where: { courseId: courseId },
-    });
-
-    const performanceData = [];
-
-    for (const enrollment of enrollments) {
-      try {
-        const result = await this.calculateCourseGrade(courseId, enrollment.id);
-        performanceData.push({
-          enrollmentId: enrollment.id,
-          userId: enrollment.userId,
-          grade: result.grade,
-          passed: result.passed,
-        });
-      } catch (error) {
-        performanceData.push({
-          enrollmentId: enrollment.id,
-          userId: enrollment.userId,
-          grade: null,
-          passed: false,
-          error: error.message,
-        });
-      }
-    }
-
-    return performanceData;
+  async getCoursePerformance(...args: any[]): Promise<any> {
+    return this.delegateAssignmentGrade('getCoursePerformance', args);
   }
 
   async listCourseVersions(...args: any[]): Promise<any> {
@@ -2258,1407 +1492,215 @@ export class CoursesService {
   }
 
   // Content Release methods
-  async createContentRelease(
-    courseId: string,
-    contentType: string,
-    contentId: string,
-    releaseType: string,
-    releaseDate: Date,
-    releaseConditions: any,
-    createdBy: string,
-  ): Promise<ContentRelease> {
-    const release = new ContentRelease();
-    release.contentType = contentType;
-    release.contentId = contentId;
-    release.releaseType = releaseType as ReleaseType;
-    release.releaseDate = releaseDate;
-    release.releaseConditions = releaseConditions;
-    release.isActive = true;
-    release.isReleased = false;
-    release.createdBy = createdBy;
-    release.updatedBy = createdBy;
-
-    // Set the course relation
-    const course = new Course();
-    course.id = courseId;
-    release.course = course;
-
-    return this.contentReleaseRepository.save(release);
+  async createContentRelease(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('createContentRelease', args);
   }
 
-  async getContentReleasesByCourse(courseId: string): Promise<ContentRelease[]> {
-    return this.contentReleaseRepository.find({
-      where: { course: { id: courseId } },
-      order: { releaseDate: 'ASC' },
-    });
+  async getContentReleasesByCourse(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getContentReleasesByCourse', args);
   }
 
-  async getContentReleaseById(id: string): Promise<ContentRelease> {
-    return this.contentReleaseRepository.findOne({
-      where: { id },
-    });
+  async getContentReleaseById(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getContentReleaseById', args);
   }
 
-  async updateContentRelease(
-    id: string,
-    contentType: string,
-    contentId: string,
-    releaseType: string,
-    releaseDate: Date,
-    releaseConditions: any,
-    isActive: boolean,
-    updatedBy: string,
-  ): Promise<ContentRelease> {
-    const release = await this.contentReleaseRepository.findOne({
-      where: { id },
-    });
-
-    if (!release) {
-      throw new Error('Content release not found');
-    }
-
-    release.contentType = contentType;
-    release.contentId = contentId;
-    release.releaseType = releaseType as ReleaseType;
-    release.releaseDate = releaseDate;
-    release.releaseConditions = releaseConditions;
-    release.isActive = isActive;
-    release.updatedBy = updatedBy;
-
-    return this.contentReleaseRepository.save(release);
+  async updateContentRelease(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('updateContentRelease', args);
   }
 
-  async deleteContentRelease(id: string): Promise<void> {
-    await this.contentReleaseRepository.delete(id);
+  async deleteContentRelease(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('deleteContentRelease', args);
   }
 
-  async releaseContentManually(
-    id: string,
-    releasedBy: string,
-  ): Promise<ContentRelease> {
-    const release = await this.contentReleaseRepository.findOne({
-      where: { id },
-    });
-
-    if (!release) {
-      throw new Error('Content release not found');
-    }
-
-    if (release.isReleased) {
-      throw new Error('Content already released');
-    }
-
-    release.isReleased = true;
-    release.releasedAt = new Date();
-    release.releasedBy = releasedBy;
-
-    return this.contentReleaseRepository.save(release);
+  async releaseContentManually(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('releaseContentManually', args);
   }
 
-  async checkAutomaticReleases(courseId: string): Promise<ContentRelease[]> {
-    const now = new Date();
-    const releases = await this.contentReleaseRepository.find({
-      where: {
-        course: { id: courseId },
-        releaseType: ReleaseType.TIME_BASED,
-        isReleased: false,
-        isActive: true,
-        releaseDate: LessThanOrEqual(now),
-      },
-    });
-
-    const releasedContent = [];
-
-    for (const release of releases) {
-      release.isReleased = true;
-      release.releasedAt = now;
-      release.releasedBy = 'system';
-      const updatedRelease = await this.contentReleaseRepository.save(release);
-      releasedContent.push(updatedRelease);
-    }
-
-    return releasedContent;
+  async checkAutomaticReleases(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('checkAutomaticReleases', args);
   }
 
-  async checkProgressBasedReleases(
-    courseId: string,
-    enrollmentId: string,
-  ): Promise<ContentRelease[]> {
-    const releases = await this.contentReleaseRepository.find({
-      where: {
-        course: { id: courseId },
-        releaseType: ReleaseType.PROGRESS_BASED,
-        isReleased: false,
-        isActive: true,
-      },
-    });
-
-    const releasedContent = [];
-
-    for (const release of releases) {
-      const conditions = release.releaseConditions;
-      
-      // Check if conditions are met based on learning path progress
-      const learningPath = await this.getLearningPathProgress(
-        courseId,
-        enrollmentId,
-      );
-
-      let conditionsMet = true;
-
-      if (conditions.minCompletionPercentage) {
-        if (
-          learningPath.progressPercentage <
-          conditions.minCompletionPercentage
-        ) {
-          conditionsMet = false;
-        }
-      }
-
-      if (conditions.requiredTaskIds) {
-        for (const requiredTaskId of conditions.requiredTaskIds) {
-          const taskProgress = await this.taskProgressRepository.findOne({
-            where: {
-              task: { id: requiredTaskId },
-              enrollment: { id: enrollmentId },
-            },
-          });
-
-          if (!taskProgress || taskProgress.status !== 'COMPLETED') {
-            conditionsMet = false;
-            break;
-          }
-        }
-      }
-
-      if (conditionsMet) {
-        release.isReleased = true;
-        release.releasedAt = new Date();
-        release.releasedBy = 'system';
-        const updatedRelease = await this.contentReleaseRepository.save(
-          release,
-        );
-        releasedContent.push(updatedRelease);
-      }
-    }
-
-    return releasedContent;
+  async checkProgressBasedReleases(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('checkProgressBasedReleases', args);
   }
 
-  async getReleasedContentForEnrollment(
-    courseId: string,
-    enrollmentId: string,
-  ): Promise<any[]> {
-    // Check and process automatic releases
-    await this.checkAutomaticReleases(courseId);
-    await this.checkProgressBasedReleases(courseId, enrollmentId);
-
-    // Get all released content for the course
-    const releases = await this.contentReleaseRepository.find({
-      where: {
-        course: { id: courseId },
-        isReleased: true,
-        isActive: true,
-      },
-      relations: ['course'],
-    });
-
-    const releasedContent = [];
-
-    for (const release of releases) {
-      let contentDetails = null;
-
-      switch (release.contentType) {
-        case 'LEARNING_MATERIAL':
-          contentDetails = await this.learningMaterialRepository.findOne({
-            where: { id: release.contentId },
-          });
-          break;
-        case 'ASSIGNMENT':
-          contentDetails = await this.assignmentRepository.findOne({
-            where: { id: release.contentId },
-          });
-          break;
-        case 'TASK':
-          contentDetails = await this.taskRepository.findOne({
-            where: { id: release.contentId },
-          });
-          break;
-        // Add other content types as needed
-      }
-
-      if (contentDetails) {
-        releasedContent.push({
-          releaseId: release.id,
-          contentType: release.contentType,
-          contentId: release.contentId,
-          contentDetails,
-          releasedAt: release.releasedAt,
-          releasedBy: release.releasedBy,
-        });
-      }
-    }
-
-    return releasedContent;
+  async getReleasedContentForEnrollment(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getReleasedContentForEnrollment', args);
   }
 
-  async getContentReleaseStatus(
-    courseId: string,
-    enrollmentId: string,
-  ): Promise<any> {
-    // Get all content releases for the course
-    const allReleases = await this.contentReleaseRepository.find({
-      where: { course: { id: courseId }, isActive: true },
-    });
-
-    // Check automatic releases
-    const autoReleased = await this.checkAutomaticReleases(courseId);
-    
-    // Check progress-based releases
-    const progressReleased = await this.checkProgressBasedReleases(
-      courseId,
-      enrollmentId,
-    );
-
-    // Get final status
-    const finalReleases = await this.contentReleaseRepository.find({
-      where: { course: { id: courseId }, isActive: true },
-    });
-
-    const releasedCount = finalReleases.filter(r => r.isReleased).length;
-    const pendingCount = finalReleases.filter(r => !r.isReleased).length;
-
-    return {
-      totalReleases: finalReleases.length,
-      releasedCount,
-      pendingCount,
-      autoReleasedCount: autoReleased.length,
-      progressReleasedCount: progressReleased.length,
-      releaseDetails: finalReleases.map(r => ({
-        id: r.id,
-        contentType: r.contentType,
-        contentId: r.contentId,
-        releaseType: r.releaseType,
-        isReleased: r.isReleased,
-        releaseDate: r.releaseDate,
-        releasedAt: r.releasedAt,
-      })),
-    };
+  async getContentReleaseStatus(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getContentReleaseStatus', args);
   }
 
   // Content Template methods
-  async createContentTemplate(
-    courseId: string,
-    name: string,
-    description: string,
-    templateType: string,
-    templateData: any,
-    placeholders: any,
-    isGlobal: boolean,
-    createdBy: string,
-  ): Promise<ContentTemplate> {
-    const template = new ContentTemplate();
-    template.name = name;
-    template.description = description;
-    template.templateType = templateType;
-    template.templateData = templateData;
-    template.placeholders = placeholders;
-    template.isGlobal = isGlobal;
-    template.createdBy = createdBy;
-    template.updatedBy = createdBy;
-    template.isActive = true;
-
-    // Set the course relation
-    const course = new Course();
-    course.id = courseId;
-    template.course = course;
-
-    return this.contentTemplateRepository.save(template);
+  async createContentTemplate(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('createContentTemplate', args);
   }
 
-  async getContentTemplatesByCourse(courseId: string): Promise<ContentTemplate[]> {
-    return this.contentTemplateRepository.find({
-      where: { course: { id: courseId } },
-      order: { name: 'ASC' },
-    });
+  async getContentTemplatesByCourse(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getContentTemplatesByCourse', args);
   }
 
-  async getGlobalContentTemplates(): Promise<ContentTemplate[]> {
-    return this.contentTemplateRepository.find({
-      where: { isGlobal: true },
-      order: { name: 'ASC' },
-    });
+  async getGlobalContentTemplates(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getGlobalContentTemplates', args);
   }
 
-  async getContentTemplateById(id: string): Promise<ContentTemplate> {
-    return this.contentTemplateRepository.findOne({
-      where: { id },
-    });
+  async getContentTemplateById(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getContentTemplateById', args);
   }
 
-  async updateContentTemplate(
-    id: string,
-    name: string,
-    description: string,
-    templateType: string,
-    templateData: any,
-    placeholders: any,
-    isActive: boolean,
-    isGlobal: boolean,
-    updatedBy: string,
-  ): Promise<ContentTemplate> {
-    const template = await this.contentTemplateRepository.findOne({
-      where: { id },
-    });
-
-    if (!template) {
-      throw new Error('Content template not found');
-    }
-
-    template.name = name;
-    template.description = description;
-    template.templateType = templateType;
-    template.templateData = templateData;
-    template.placeholders = placeholders;
-    template.isActive = isActive;
-    template.isGlobal = isGlobal;
-    template.updatedBy = updatedBy;
-
-    return this.contentTemplateRepository.save(template);
+  async updateContentTemplate(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('updateContentTemplate', args);
   }
 
-  async deleteContentTemplate(id: string): Promise<void> {
-    await this.contentTemplateRepository.delete(id);
+  async deleteContentTemplate(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('deleteContentTemplate', args);
   }
 
-  async applyTemplateToCourse(
-    templateId: string,
-    courseId: string,
-    appliedBy: string,
-  ): Promise<any> {
-    const template = await this.contentTemplateRepository.findOne({
-      where: { id: templateId },
-    });
-
-    if (!template) {
-      throw new Error('Template not found');
-    }
-
-    const result = {
-      templateId: template.id,
-      templateName: template.name,
-      templateType: template.templateType,
-      createdContent: [],
-      errors: [],
-    };
-
-    try {
-      switch (template.templateType) {
-        case 'COURSE_STRUCTURE':
-          // Apply course structure template
-          const structureData = template.templateData;
-          
-          if (structureData.learningMaterials) {
-            for (const materialData of structureData.learningMaterials) {
-              try {
-                const material = await this.createLearningMaterial(
-                  courseId,
-                  materialData.title,
-                  materialData.description || '',
-                  materialData.type || 'OTHER',
-                  materialData.url || '',
-                  materialData.filePath || '',
-                  appliedBy,
-                );
-                result.createdContent.push({
-                  type: 'LEARNING_MATERIAL',
-                  id: material.id,
-                  title: material.title,
-                });
-              } catch (error) {
-                result.errors.push({
-                  type: 'LEARNING_MATERIAL',
-                  error: error.message,
-                  data: materialData,
-                });
-              }
-            }
-          }
-
-          if (structureData.assignments) {
-            for (const assignmentData of structureData.assignments) {
-              try {
-                const assignment = await this.createAssignment(
-                  courseId,
-                  assignmentData.title,
-                  assignmentData.description || '',
-                  assignmentData.type || 'OTHER',
-                  assignmentData.maxPoints || 100,
-                  assignmentData.weight || 1,
-                  assignmentData.dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 1 week from now
-                  appliedBy,
-                );
-                result.createdContent.push({
-                  type: 'ASSIGNMENT',
-                  id: assignment.id,
-                  title: assignment.title,
-                });
-              } catch (error) {
-                result.errors.push({
-                  type: 'ASSIGNMENT',
-                  error: error.message,
-                  data: assignmentData,
-                });
-              }
-            }
-          }
-
-          if (structureData.tasks) {
-            for (const taskData of structureData.tasks) {
-              try {
-                const task = await this.createLearningTask(
-                  courseId,
-                  {
-                    title: taskData.title,
-                    description: taskData.description || '',
-                    type: taskData.type || 'OTHER',
-                    order: taskData.order || 1,
-                    unlockMode: taskData.prerequisiteTaskId
-                      ? TaskUnlockMode.AUTOMATIC
-                      : TaskUnlockMode.IMMEDIATE,
-                    prerequisiteTaskId: taskData.prerequisiteTaskId || null,
-                    completionCriteria: taskData.completionCriteria || {},
-                    isPublished: false,
-                  },
-                  appliedBy,
-                );
-                result.createdContent.push({
-                  type: 'TASK',
-                  id: task.id,
-                  title: task.title,
-                });
-              } catch (error) {
-                result.errors.push({
-                  type: 'TASK',
-                  error: error.message,
-                  data: taskData,
-                });
-              }
-            }
-          }
-
-          break;
-
-        case 'ASSIGNMENT':
-          // Apply assignment template
-          const assignmentData = template.templateData;
-          const assignment = await this.createAssignment(
-            courseId,
-            assignmentData.title,
-            assignmentData.description || '',
-            assignmentData.type || 'OTHER',
-            assignmentData.maxPoints || 100,
-            assignmentData.weight || 1,
-            assignmentData.dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            appliedBy,
-          );
-          result.createdContent.push({
-            type: 'ASSIGNMENT',
-            id: assignment.id,
-            title: assignment.title,
-          });
-          break;
-
-        case 'LEARNING_MATERIAL':
-          // Apply learning material template
-          const materialData = template.templateData;
-          const material = await this.createLearningMaterial(
-            courseId,
-            materialData.title,
-            materialData.description || '',
-            materialData.type || 'OTHER',
-            materialData.url || '',
-            materialData.filePath || '',
-            appliedBy,
-          );
-          result.createdContent.push({
-            type: 'LEARNING_MATERIAL',
-            id: material.id,
-            title: material.title,
-          });
-          break;
-
-        case 'SYLLABUS':
-          // Apply syllabus template - could create a learning material with syllabus content
-          const syllabusData = template.templateData;
-          const syllabusMaterial = await this.createLearningMaterial(
-            courseId,
-            'Course Syllabus',
-            syllabusData.description || 'Course syllabus',
-            'DOCUMENT',
-            '',
-            '',
-            appliedBy,
-          );
-          result.createdContent.push({
-            type: 'SYLLABUS',
-            id: syllabusMaterial.id,
-            title: syllabusMaterial.title,
-          });
-          break;
-
-        default:
-          throw new Error(`Unsupported template type: ${template.templateType}`);
-      }
-
-      return result;
-    } catch (error) {
-      result.errors.push({
-        type: 'GENERAL',
-        error: error.message,
-      });
-      return result;
-    }
+  async applyTemplateToCourse(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('applyTemplateToCourse', args);
   }
 
-  async getAvailableTemplatesForCourse(courseId: string): Promise<ContentTemplate[]> {
-    // Get course-specific templates
-    const courseTemplates = await this.getContentTemplatesByCourse(courseId);
-
-    // Get global templates
-    const globalTemplates = await this.getGlobalContentTemplates();
-
-    // Combine and remove duplicates
-    const allTemplates = [...courseTemplates, ...globalTemplates];
-    
-    return allTemplates.filter(
-      (template, index, self) =>
-        index === self.findIndex(t => t.id === template.id),
-    );
+  async getAvailableTemplatesForCourse(...args: any[]): Promise<any> {
+    return this.delegateContentReleaseTemplate('getAvailableTemplatesForCourse', args);
   }
 
   // Search methods
-  async searchCourses(
-    query: string,
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<Course[]> {
-    return this.coursesRepository.find({
-      where: [
-        { title: ILike(`%${query}%`) },
-        { description: ILike(`%${query}%`) },
-        { external_id: ILike(`%${query}%`) },
-      ],
-      take: limit,
-      skip: offset,
-    });
+  async searchCourses(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('searchCourses', args);
   }
 
-  async searchLearningMaterials(
-    courseId: string,
-    query: string,
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<LearningMaterial[]> {
-    const { run, version } =
-      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
-
-    return this.learningMaterialRepository.find({
-      where: {
-        courseId: this.toCourseId(courseId),
-        courseRunId: run.id,
-        courseVersionId: version.id,
-        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
-        title: ILike(`%${query}%`),
-      },
-      take: limit,
-      skip: offset,
-    });
+  async searchLearningMaterials(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('searchLearningMaterials', args);
   }
 
-  async searchAssignments(
-    courseId: string,
-    query: string,
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<Assignment[]> {
-    return this.assignmentRepository.find({
-      where: {
-        course: { id: courseId },
-        title: ILike(`%${query}%`),
-      },
-      take: limit,
-      skip: offset,
-    });
+  async searchAssignments(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('searchAssignments', args);
   }
 
-  async searchTasks(
-    courseId: string,
-    query: string,
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<Task[]> {
-    const { run, version } =
-      await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
-
-    return this.taskRepository.find({
-      where: {
-        courseId: this.toCourseId(courseId),
-        courseRunId: run.id,
-        courseVersionId: version.id,
-        title: ILike(`%${query}%`),
-      },
-      take: limit,
-      skip: offset,
-    });
+  async searchTasks(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('searchTasks', args);
   }
 
-  async searchContentTemplates(
-    query: string,
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<ContentTemplate[]> {
-    return this.contentTemplateRepository.find({
-      where: [
-        { name: ILike(`%${query}%`) },
-        { description: ILike(`%${query}%`) },
-      ],
-      take: limit,
-      skip: offset,
-    });
+  async searchContentTemplates(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('searchContentTemplates', args);
   }
 
-  async advancedSearch(
-    query: string,
-    contentTypes: string[] = ['COURSE', 'LEARNING_MATERIAL', 'ASSIGNMENT', 'TASK'],
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<any> {
-    const results: any = {
-      courses: [],
-      learningMaterials: [],
-      assignments: [],
-      tasks: [],
-      templates: [],
-    };
-
-    if (contentTypes.includes('COURSE')) {
-      results.courses = await this.searchCourses(query, limit, offset);
-    }
-
-    if (contentTypes.includes('LEARNING_MATERIAL')) {
-      // Search across all courses for learning materials
-      results.learningMaterials = await this.learningMaterialRepository.find({
-        where: {
-          title: ILike(`%${query}%`),
-        },
-        take: limit,
-        skip: offset,
-        relations: ['course'],
-      });
-    }
-
-    if (contentTypes.includes('ASSIGNMENT')) {
-      // Search across all courses for assignments
-      results.assignments = await this.assignmentRepository.find({
-        where: {
-          title: ILike(`%${query}%`),
-        },
-        take: limit,
-        skip: offset,
-        relations: ['course'],
-      });
-    }
-
-    if (contentTypes.includes('TASK')) {
-      // Search across all courses for tasks
-      results.tasks = await this.taskRepository.find({
-        where: {
-          title: ILike(`%${query}%`),
-        },
-        take: limit,
-        skip: offset,
-        relations: ['course'],
-      });
-    }
-
-    if (contentTypes.includes('TEMPLATE')) {
-      results.templates = await this.searchContentTemplates(query, limit, offset);
-    }
-
-    return results;
+  async advancedSearch(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('advancedSearch', args);
   }
 
-  async searchWithinCourse(
-    courseId: string,
-    query: string,
-    contentTypes: string[] = ['LEARNING_MATERIAL', 'ASSIGNMENT', 'TASK'],
-    limit: number = 10,
-    offset: number = 0,
-  ): Promise<any> {
-    const results: any = {
-      learningMaterials: [],
-      assignments: [],
-      tasks: [],
-    };
-
-    if (contentTypes.includes('LEARNING_MATERIAL')) {
-      results.learningMaterials = await this.searchLearningMaterials(
-        courseId,
-        query,
-        limit,
-        offset,
-      );
-    }
-
-    if (contentTypes.includes('ASSIGNMENT')) {
-      results.assignments = await this.searchAssignments(
-        courseId,
-        query,
-        limit,
-        offset,
-      );
-    }
-
-    if (contentTypes.includes('TASK')) {
-      results.tasks = await this.searchTasks(courseId, query, limit, offset);
-    }
-
-    return results;
+  async searchWithinCourse(...args: any[]): Promise<any> {
+    return this.delegateCourseSearch('searchWithinCourse', args);
   }
 
   // Workgroup methods
-  async createCourseGroup(
-    courseId: string,
-    name: string,
-    description: string,
-    groupType: string,
-    createdBy: string,
-  ): Promise<CourseGroup> {
-    const group = new CourseGroup();
-    group.course_id = courseId;
-    group.name = name;
-    group.description = description;
-    group.group_type = groupType as any;
-    group.created_by = createdBy;
-    group.updated_by = createdBy;
-
-    return this.courseGroupRepository.save(group);
+  async createCourseGroup(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('createCourseGroup', args);
   }
 
-  async getCourseGroupsByCourse(courseId: string): Promise<CourseGroup[]> {
-    return this.courseGroupRepository.find({
-      where: { course_id: courseId },
-      relations: ['memberships'],
-    });
+  async getCourseGroupsByCourse(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getCourseGroupsByCourse', args);
   }
 
-  async getCourseGroupById(id: string): Promise<CourseGroup> {
-    return this.courseGroupRepository.findOne({
-      where: { id },
-      relations: ['memberships'],
-    });
+  async getCourseGroupById(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getCourseGroupById', args);
   }
 
-  async updateCourseGroup(
-    id: string,
-    name: string,
-    description: string,
-    groupType: string,
-    isActive: boolean,
-    groupGrade: number,
-    groupFeedback: string,
-    updatedBy: string,
-  ): Promise<CourseGroup> {
-    const group = await this.courseGroupRepository.findOne({
-      where: { id },
-    });
-
-    if (!group) {
-      throw new Error('Course group not found');
-    }
-
-    group.name = name;
-    group.description = description;
-    group.group_type = groupType as any;
-    group.is_active = isActive;
-    group.group_grade = groupGrade;
-    group.group_feedback = groupFeedback;
-    group.updated_by = updatedBy;
-
-    return this.courseGroupRepository.save(group);
+  async updateCourseGroup(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('updateCourseGroup', args);
   }
 
-  async deleteCourseGroup(id: string): Promise<void> {
-    await this.courseGroupRepository.delete(id);
+  async deleteCourseGroup(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('deleteCourseGroup', args);
   }
 
-  async addMemberToGroup(
-    groupId: string,
-    userId: string,
-    role: string,
-    addedBy: string,
-  ): Promise<GroupMembership> {
-    const membership = new GroupMembership();
-    membership.group_id = groupId;
-    membership.user_id = userId;
-    membership.role = role as any;
-    membership.joined_at = new Date();
-    membership.added_by = addedBy;
-
-    return this.groupMembershipRepository.save(membership);
+  async addMemberToGroup(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('addMemberToGroup', args);
   }
 
-  async removeMemberFromGroup(groupId: string, userId: string): Promise<void> {
-    await this.groupMembershipRepository.delete({
-      group_id: groupId,
-      user_id: userId,
-    });
+  async removeMemberFromGroup(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('removeMemberFromGroup', args);
   }
 
-  async updateGroupMembershipRole(
-    groupId: string,
-    userId: string,
-    role: string,
-  ): Promise<GroupMembership> {
-    const membership = await this.groupMembershipRepository.findOne({
-      where: { group_id: groupId, user_id: userId },
-    });
-
-    if (!membership) {
-      throw new Error('Group membership not found');
-    }
-
-    membership.role = role as any;
-
-    return this.groupMembershipRepository.save(membership);
+  async updateGroupMembershipRole(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('updateGroupMembershipRole', args);
   }
 
-  async getGroupMembers(groupId: string): Promise<GroupMembership[]> {
-    return this.groupMembershipRepository.find({
-      where: { group_id: groupId },
-    });
+  async getGroupMembers(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getGroupMembers', args);
   }
 
-  async getGroupsForUser(courseId: string, userId: string): Promise<CourseGroup[]> {
-    const memberships = await this.groupMembershipRepository.find({
-      where: { user_id: userId },
-      relations: ['group'],
-    });
-
-    return memberships
-      .map(m => m.group)
-      .filter(group => group.course_id === courseId);
+  async getGroupsForUser(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getGroupsForUser', args);
   }
 
-  async getGroupMembership(
-    groupId: string,
-    userId: string,
-  ): Promise<GroupMembership> {
-    return this.groupMembershipRepository.findOne({
-      where: { group_id: groupId, user_id: userId },
-    });
+  async getGroupMembership(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getGroupMembership', args);
   }
 
-  async assignGroupGrade(
-    groupId: string,
-    grade: number,
-    feedback: string,
-    updatedBy: string,
-  ): Promise<CourseGroup> {
-    const group = await this.courseGroupRepository.findOne({
-      where: { id: groupId },
-    });
-
-    if (!group) {
-      throw new Error('Group not found');
-    }
-
-    group.group_grade = grade;
-    group.group_feedback = feedback;
-    group.updated_by = updatedBy;
-
-    return this.courseGroupRepository.save(group);
+  async assignGroupGrade(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('assignGroupGrade', args);
   }
 
-  async assignIndividualGrade(
-    groupId: string,
-    userId: string,
-    grade: number,
-    feedback: string,
-  ): Promise<GroupMembership> {
-    const membership = await this.groupMembershipRepository.findOne({
-      where: { group_id: groupId, user_id: userId },
-    });
-
-    if (!membership) {
-      throw new Error('Group membership not found');
-    }
-
-    membership.individual_grade = grade;
-    membership.individual_feedback = feedback;
-
-    return this.groupMembershipRepository.save(membership);
+  async assignIndividualGrade(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('assignIndividualGrade', args);
   }
 
-  async getGroupPerformance(groupId: string): Promise<any> {
-    const group = await this.courseGroupRepository.findOne({
-      where: { id: groupId },
-      relations: ['memberships'],
-    });
-
-    if (!group) {
-      throw new Error('Group not found');
-    }
-
-    const members = group.memberships || [];
-    
-    const individualGrades = members
-      .filter(m => m.individual_grade !== null && m.individual_grade !== undefined)
-      .map(m => m.individual_grade);
-
-    const averageGrade =
-      individualGrades.length > 0
-        ? individualGrades.reduce((sum, grade) => sum + grade, 0) /
-          individualGrades.length
-        : 0;
-
-    return {
-      groupId: group.id,
-      groupName: group.name,
-      groupGrade: group.group_grade,
-      groupFeedback: group.group_feedback,
-      averageIndividualGrade: averageGrade,
-      memberCount: members.length,
-      membersWithGrades: individualGrades.length,
-      memberPerformance: members.map(m => ({
-        userId: m.user_id,
-        role: m.role,
-        individualGrade: m.individual_grade,
-        individualFeedback: m.individual_feedback,
-      })),
-    };
+  async getGroupPerformance(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getGroupPerformance', args);
   }
 
-  async autoCreateWorkgroups(
-    courseId: string,
-    groupSize: number,
-    groupPrefix: string,
-    createdBy: string,
-  ): Promise<CourseGroup[]> {
-    // Get all enrollments for the course
-    const enrollments = await this.enrollmentRepository.find({
-      where: { courseId: courseId },
-    });
-
-    const studentEnrollments = enrollments.filter(
-      e => e.role === CourseMemberRole.STUDENT,
-    );
-
-    const createdGroups = [];
-
-    // Create groups with the specified size
-    for (let i = 0; i < studentEnrollments.length; i += groupSize) {
-      const groupNumber = Math.floor(i / groupSize) + 1;
-      const groupName = `${groupPrefix} ${groupNumber}`;
-
-      const group = await this.createCourseGroup(
-        courseId,
-        groupName,
-        `Auto-created workgroup ${groupNumber}`,
-        'WORKGROUP',
-        createdBy,
-      );
-
-      // Add members to the group
-      const groupMembers = studentEnrollments.slice(i, i + groupSize);
-      for (const member of groupMembers) {
-        await this.addMemberToGroup(
-          group.id,
-          member.userId,
-          'MEMBER',
-          createdBy,
-        );
-      }
-
-      // Assign the first member as leader
-      if (groupMembers.length > 0) {
-        await this.updateGroupMembershipRole(
-          group.id,
-          groupMembers[0].userId,
-          'LEADER',
-        );
-      }
-
-      createdGroups.push(group);
-    }
-
-    return createdGroups;
+  async autoCreateWorkgroups(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('autoCreateWorkgroups', args);
   }
 
-  async getGroupLearningProgress(
-    groupId: string,
-    courseId: string,
-  ): Promise<any> {
-    const group = await this.courseGroupRepository.findOne({
-      where: { id: groupId },
-      relations: ['memberships'],
-    });
-
-    if (!group) {
-      throw new Error('Group not found');
-    }
-
-    const memberProgress = [];
-
-    for (const membership of group.memberships) {
-      try {
-        const progress = await this.getLearningPathProgress(
-          courseId,
-          membership.user_id,
-        );
-        
-        memberProgress.push({
-          userId: membership.user_id,
-          role: membership.role,
-          ...progress,
-        });
-      } catch (error) {
-        memberProgress.push({
-          userId: membership.user_id,
-          role: membership.role,
-          error: error.message,
-        });
-      }
-    }
-
-    // Calculate average progress
-    const validProgresses = memberProgress.filter(
-      p => p.progressPercentage !== undefined,
-    );
-    const averageProgress =
-      validProgresses.length > 0
-        ? validProgresses.reduce(
-            (sum, p) => sum + p.progressPercentage,
-            0,
-          ) / validProgresses.length
-        : 0;
-
-    return {
-      groupId: group.id,
-      groupName: group.name,
-      averageProgress,
-      memberCount: group.memberships.length,
-      membersWithProgress: validProgresses.length,
-      memberProgress,
-    };
+  async getGroupLearningProgress(...args: any[]): Promise<any> {
+    return this.delegateLegacyWorkgroup('getGroupLearningProgress', args);
   }
 
   // Calendar Event methods
-  async createCalendarEvent(
-    courseId: string,
-    title: string,
-    description: string,
-    eventType: string,
-    startTime: Date,
-    endTime: Date,
-    location: string,
-    onlineLink: string,
-    isAllDay: boolean,
-    isRecurring: boolean,
-    recurrencePattern: any,
-    relatedContentId: string,
-    relatedContentType: string,
-    createdBy: string,
-  ): Promise<CalendarEvent> {
-    const event = new CalendarEvent();
-    event.title = title;
-    event.description = description;
-    event.eventType = eventType;
-    event.startTime = startTime;
-    event.endTime = endTime;
-    event.location = location;
-    event.onlineLink = onlineLink;
-    event.isAllDay = isAllDay;
-    event.isRecurring = isRecurring;
-    event.recurrencePattern = recurrencePattern;
-    event.relatedContentId = relatedContentId;
-    event.relatedContentType = relatedContentType;
-    event.createdBy = createdBy;
-    event.updatedBy = createdBy;
-
-    // Set the course relation
-    const course = new Course();
-    course.id = courseId;
-    event.course = course;
-
-    return this.calendarEventRepository.save(event);
+  async createCalendarEvent(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('createCalendarEvent', args);
   }
 
-  async getCalendarEventsByCourse(
-    courseId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<CalendarEvent[]> {
-    return this.calendarEventRepository.find({
-      where: {
-        course: { id: courseId },
-        startTime: LessThanOrEqual(endDate),
-        endTime: MoreThanOrEqual(startDate),
-      },
-      order: { startTime: 'ASC' },
-    });
+  async getCalendarEventsByCourse(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('getCalendarEventsByCourse', args);
   }
 
-  async getCalendarEventById(id: string): Promise<CalendarEvent> {
-    return this.calendarEventRepository.findOne({
-      where: { id },
-    });
+  async getCalendarEventById(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('getCalendarEventById', args);
   }
 
-  async updateCalendarEvent(
-    id: string,
-    title: string,
-    description: string,
-    eventType: string,
-    startTime: Date,
-    endTime: Date,
-    location: string,
-    onlineLink: string,
-    isAllDay: boolean,
-    isRecurring: boolean,
-    recurrencePattern: any,
-    relatedContentId: string,
-    relatedContentType: string,
-    updatedBy: string,
-  ): Promise<CalendarEvent> {
-    const event = await this.calendarEventRepository.findOne({
-      where: { id },
-    });
-
-    if (!event) {
-      throw new Error('Calendar event not found');
-    }
-
-    event.title = title;
-    event.description = description;
-    event.eventType = eventType;
-    event.startTime = startTime;
-    event.endTime = endTime;
-    event.location = location;
-    event.onlineLink = onlineLink;
-    event.isAllDay = isAllDay;
-    event.isRecurring = isRecurring;
-    event.recurrencePattern = recurrencePattern;
-    event.relatedContentId = relatedContentId;
-    event.relatedContentType = relatedContentType;
-    event.updatedBy = updatedBy;
-
-    return this.calendarEventRepository.save(event);
+  async updateCalendarEvent(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('updateCalendarEvent', args);
   }
 
-  async deleteCalendarEvent(id: string): Promise<void> {
-    await this.calendarEventRepository.delete(id);
+  async deleteCalendarEvent(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('deleteCalendarEvent', args);
   }
 
-  async createAssignmentDueDateEvents(
-    courseId: string,
-    createdBy: string,
-  ): Promise<CalendarEvent[]> {
-    const assignments = await this.assignmentRepository.find({
-      where: {
-        course: { id: courseId },
-        dueDate: Not(IsNull()),
-      },
-    });
-
-    const createdEvents = [];
-
-    for (const assignment of assignments) {
-      // Check if event already exists for this assignment
-      const existingEvent = await this.calendarEventRepository.findOne({
-        where: {
-          relatedContentId: assignment.id,
-          relatedContentType: 'ASSIGNMENT',
-        },
-      });
-
-      if (!existingEvent) {
-        const event = await this.createCalendarEvent(
-          courseId,
-          `Due: ${assignment.title}`,
-          assignment.description || 'Assignment due date',
-          'ASSIGNMENT_DUE',
-          assignment.dueDate,
-          assignment.dueDate,
-          '',
-          '',
-          false,
-          false,
-          null,
-          assignment.id,
-          'ASSIGNMENT',
-          createdBy,
-        );
-        createdEvents.push(event);
-      }
-    }
-
-    return createdEvents;
+  async createAssignmentDueDateEvents(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('createAssignmentDueDateEvents', args);
   }
 
-  async getUpcomingEvents(
-    courseId: string,
-    limit: number = 5,
-  ): Promise<CalendarEvent[]> {
-    const now = new Date();
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 30); // Next 30 days
-
-    return this.calendarEventRepository.find({
-      where: {
-        course: { id: courseId },
-        startTime: MoreThanOrEqual(now),
-        endTime: LessThanOrEqual(futureDate),
-      },
-      order: { startTime: 'ASC' },
-      take: limit,
-    });
+  async getUpcomingEvents(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('getUpcomingEvents', args);
   }
 
-  async getEventsByDateRange(
-    courseId: string,
-    startDate: Date,
-    endDate: Date,
-  ): Promise<CalendarEvent[]> {
-    return this.calendarEventRepository.find({
-      where: {
-        course: { id: courseId },
-        startTime: LessThanOrEqual(endDate),
-        endTime: MoreThanOrEqual(startDate),
-      },
-      order: { startTime: 'ASC' },
-    });
+  async getEventsByDateRange(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('getEventsByDateRange', args);
   }
 
-  async getDailyEvents(
-    courseId: string,
-    date: Date,
-  ): Promise<CalendarEvent[]> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    return this.calendarEventRepository.find({
-      where: [
-        {
-          course: { id: courseId },
-          startTime: LessThanOrEqual(endOfDay),
-          endTime: MoreThanOrEqual(startOfDay),
-        },
-        {
-          course: { id: courseId },
-          isAllDay: true,
-          startTime: LessThanOrEqual(endOfDay),
-          endTime: MoreThanOrEqual(startOfDay),
-        },
-      ],
-      order: { startTime: 'ASC' },
-    });
+  async getDailyEvents(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('getDailyEvents', args);
   }
 
-  async getMonthlyEvents(
-    courseId: string,
-    year: number,
-    month: number,
-  ): Promise<CalendarEvent[]> {
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
-
-    return this.calendarEventRepository.find({
-      where: {
-        course: { id: courseId },
-        startTime: LessThanOrEqual(endDate),
-        endTime: MoreThanOrEqual(startDate),
-      },
-      order: { startTime: 'ASC' },
-    });
+  async getMonthlyEvents(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('getMonthlyEvents', args);
   }
 
-  async syncAssignmentDueDates(
-    courseId: string,
-    createdBy: string,
-  ): Promise<{ created: CalendarEvent[]; deleted: number }> {
-    // Get all assignments with due dates
-    const assignments = await this.assignmentRepository.find({
-      where: {
-        course: { id: courseId },
-        dueDate: Not(IsNull()),
-      },
-    });
-
-    // Get all existing assignment-related events
-    const existingEvents = await this.calendarEventRepository.find({
-      where: {
-        course: { id: courseId },
-        relatedContentType: 'ASSIGNMENT',
-      },
-    });
-
-    const assignmentIds = assignments.map(a => a.id);
-    const existingEventAssignmentIds = existingEvents.map(e => e.relatedContentId);
-
-    // Find events to delete (assignments that no longer exist or have no due date)
-    const eventsToDelete = existingEvents.filter(
-      event => !assignmentIds.includes(event.relatedContentId),
-    );
-
-    // Delete obsolete events
-    const deleteResults = [];
-    for (const event of eventsToDelete) {
-      try {
-        await this.deleteCalendarEvent(event.id);
-        deleteResults.push(event.id);
-      } catch (error) {
-        // Continue with other deletions even if one fails
-      }
-    }
-
-    // Create events for assignments that don't have events yet
-    const createdEvents = [];
-    for (const assignment of assignments) {
-      const hasEvent = existingEventAssignmentIds.includes(assignment.id);
-
-      if (!hasEvent) {
-        try {
-          const event = await this.createCalendarEvent(
-            courseId,
-            `Due: ${assignment.title}`,
-            assignment.description || 'Assignment due date',
-            'ASSIGNMENT_DUE',
-            assignment.dueDate,
-            assignment.dueDate,
-            '',
-            '',
-            false,
-            false,
-            null,
-            assignment.id,
-            'ASSIGNMENT',
-            createdBy,
-          );
-          createdEvents.push(event);
-        } catch (error) {
-          // Continue with other creations even if one fails
-        }
-      }
-    }
-
-    return {
-      created: createdEvents,
-      deleted: deleteResults.length,
-    };
+  async syncAssignmentDueDates(...args: any[]): Promise<any> {
+    return this.delegateCalendarEvent('syncAssignmentDueDates', args);
   }
 }

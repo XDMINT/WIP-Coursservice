@@ -46,7 +46,7 @@
       <v-tabs v-model="activeTab" color="primary">
         <v-tab value="details">
           <v-icon start> mdi-text-box-outline </v-icon>
-          kurs details
+          Kurs Details
         </v-tab>
         <v-tab value="aufgaben">
           <v-icon start> mdi-pencil </v-icon>

@@ -149,6 +149,7 @@ const baseLearningPath = {
       locked: false,
       maxPoints: 10,
       order: 2,
+      prerequisiteTaskId: 'task-1',
       status: 'AVAILABLE',
       title: 'Grundlagen anwenden',
       type: 'DEMO_TASK',
@@ -282,9 +283,14 @@ describe('StudentCourseJourneyView', () => {
 
     expect(wrapper.text()).toContain('Deine Lernreise')
     expect(wrapper.text()).toContain('Du hast 1 von 3 Lernschritten abgeschlossen.')
+    expect(wrapper.text()).toContain('Nächste sinnvolle Aktion')
+    expect(wrapper.text()).toContain('Bearbeite als Nächstes „Grundlagen anwenden“.')
     expect(wrapper.text()).toContain('Nächster Schritt')
     expect(wrapper.text()).toContain('Grundlagen anwenden')
     expect(wrapper.text()).toContain('Aufgabe bearbeiten')
+    expect(wrapper.text()).toContain('Rückblick')
+    expect(wrapper.text()).toContain('Ergebnis: bestanden')
+    expect(wrapper.text()).toContain('Nächster Schritt: Aufgabe „Grundlagen anwenden“ ist freigeschaltet.')
     expect(wrapper.text()).toContain('Anmerkung zur Bewertung')
     expect(wrapper.text()).toContain('Gut gemacht.')
     expect(wrapper.text()).toContain('Arbeitsblatt Gruppe')

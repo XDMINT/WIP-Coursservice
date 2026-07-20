@@ -32,7 +32,6 @@ class AuthService {
 
   logout() {
     localStorage.removeItem('user')
-    console.log('logout successful')
   }
 
   isValid() {

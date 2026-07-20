@@ -30,7 +30,6 @@ watch(
     showBreadcrumb.value = true
 
     hideBreadcrumbIn.forEach((route) => {
-      //console.log(`if ${route} == ${newVal}`);
       if (route == newVal) {
         showBreadcrumb.value = false
       }

@@ -25,6 +25,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { CoursesService } from './courses.service';
 import { getRequestActor } from './common/request-actor';
+import { ApiUnauthorizedError, ApiValidationError } from './common/api-errors';
 
 import { Assignment } from './entities/assignment.entity';
 import { Grade } from './entities/grade.entity';
@@ -82,6 +83,16 @@ const contentDispositionFileName = (fileName: string): string =>
 @Controller('courses')
 export class CoursesController {
     constructor(private readonly coursesService: CoursesService) {}
+
+    private getActorUserId(request: Request): string {
+        const actorUserId = getRequestActor(request).userId;
+
+        if (!actorUserId) {
+            throw new ApiUnauthorizedError();
+        }
+
+        return actorUserId;
+    }
 
     // =========================
     // COURSE CRUD
@@ -910,7 +921,10 @@ export class CoursesController {
       dueDate: Date;
       createdBy: string;
     },
+    @Req() request: Request,
   ): Promise<Assignment> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.createAssignment(
       courseId,
       body.title,
@@ -919,20 +933,31 @@ export class CoursesController {
       body.maxPoints,
       body.weight,
       body.dueDate,
-      body.createdBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Get(':courseId/assignments')
   async getAssignmentsByCourse(
     @Param('courseId') courseId: string,
+    @Req() request: Request,
   ): Promise<Assignment[]> {
-    return this.coursesService.getAssignmentsByCourse(courseId);
+    return this.coursesService.getAssignmentsByCourse(
+      courseId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('assignments/:id')
-  async getAssignmentById(@Param('id') id: string): Promise<Assignment> {
-    return this.coursesService.getAssignmentById(id);
+  async getAssignmentById(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<Assignment> {
+    return this.coursesService.getAssignmentById(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Put('assignments/:id')
@@ -949,7 +974,10 @@ export class CoursesController {
       isGraded: boolean;
       updatedBy: string;
     },
+    @Req() request: Request,
   ): Promise<Assignment> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.updateAssignment(
       id,
       body.title,
@@ -960,29 +988,48 @@ export class CoursesController {
       body.dueDate,
       body.isPublished,
       body.isGraded,
-      body.updatedBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Delete('assignments/:id')
-  async deleteAssignment(@Param('id') id: string): Promise<void> {
-    return this.coursesService.deleteAssignment(id);
+  async deleteAssignment(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<void> {
+    return this.coursesService.deleteAssignment(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Post('assignments/:id/publish')
   async publishAssignment(
     @Param('id') id: string,
-    @Body() body: { updatedBy: string },
+    @Req() request: Request,
   ): Promise<Assignment> {
-    return this.coursesService.publishAssignment(id, body.updatedBy);
+    const actorUserId = this.getActorUserId(request);
+
+    return this.coursesService.publishAssignment(
+      id,
+      actorUserId,
+      actorUserId,
+    );
   }
 
   @Post('assignments/:id/unpublish')
   async unpublishAssignment(
     @Param('id') id: string,
-    @Body() body: { updatedBy: string },
+    @Req() request: Request,
   ): Promise<Assignment> {
-    return this.coursesService.unpublishAssignment(id, body.updatedBy);
+    const actorUserId = this.getActorUserId(request);
+
+    return this.coursesService.unpublishAssignment(
+      id,
+      actorUserId,
+      actorUserId,
+    );
   }
 
   // Grade endpoints
@@ -996,34 +1043,52 @@ export class CoursesController {
       gradedBy: string;
       isFinal: boolean;
     },
+    @Req() request: Request,
   ): Promise<Grade> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.createGrade(
       assignmentId,
       body.enrollmentId,
       body.pointsAchieved,
       body.feedback,
-      body.gradedBy,
+      actorUserId,
       body.isFinal,
+      actorUserId,
     );
   }
 
   @Get('assignments/:assignmentId/grades')
   async getGradesByAssignment(
     @Param('assignmentId') assignmentId: string,
+    @Req() request: Request,
   ): Promise<Grade[]> {
-    return this.coursesService.getGradesByAssignment(assignmentId);
+    return this.coursesService.getGradesByAssignment(
+      assignmentId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('enrollments/:enrollmentId/grades')
   async getGradesByEnrollment(
     @Param('enrollmentId') enrollmentId: string,
+    @Req() request: Request,
   ): Promise<Grade[]> {
-    return this.coursesService.getGradesByEnrollment(enrollmentId);
+    return this.coursesService.getGradesByEnrollment(
+      enrollmentId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('grades/:id')
-  async getGradeById(@Param('id') id: string): Promise<Grade> {
-    return this.coursesService.getGradeById(id);
+  async getGradeById(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<Grade> {
+    return this.coursesService.getGradeById(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Put('grades/:id')
@@ -1036,35 +1101,54 @@ export class CoursesController {
       isFinal: boolean;
       updatedBy: string;
     },
+    @Req() request: Request,
   ): Promise<Grade> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.updateGrade(
       id,
       body.pointsAchieved,
       body.feedback,
-      body.gradedBy,
+      actorUserId,
       body.isFinal,
-      body.updatedBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Delete('grades/:id')
-  async deleteGrade(@Param('id') id: string): Promise<void> {
-    return this.coursesService.deleteGrade(id);
+  async deleteGrade(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<void> {
+    return this.coursesService.deleteGrade(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('courses/:courseId/enrollments/:enrollmentId/grade')
   async calculateCourseGrade(
     @Param('courseId') courseId: string,
     @Param('enrollmentId') enrollmentId: string,
+    @Req() request: Request,
   ): Promise<{ grade: number; passed: boolean }> {
-    return this.coursesService.calculateCourseGrade(courseId, enrollmentId);
+    return this.coursesService.calculateCourseGrade(
+      courseId,
+      enrollmentId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('courses/:courseId/performance')
   async getCoursePerformance(
     @Param('courseId') courseId: string,
+    @Req() request: Request,
   ): Promise<any> {
-    return this.coursesService.getCoursePerformance(courseId);
+    return this.coursesService.getCoursePerformance(
+      courseId,
+      this.getActorUserId(request),
+    );
   }
 
   // Task and learning process endpoints
@@ -1349,7 +1433,10 @@ export class CoursesController {
       releaseConditions: any;
       createdBy: string;
     },
+    @Req() request: Request,
   ): Promise<ContentRelease> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.createContentRelease(
       courseId,
       body.contentType,
@@ -1357,20 +1444,31 @@ export class CoursesController {
       body.releaseType,
       body.releaseDate,
       body.releaseConditions,
-      body.createdBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Get(':courseId/content-releases')
   async getContentReleasesByCourse(
     @Param('courseId') courseId: string,
+    @Req() request: Request,
   ): Promise<ContentRelease[]> {
-    return this.coursesService.getContentReleasesByCourse(courseId);
+    return this.coursesService.getContentReleasesByCourse(
+      courseId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('content-releases/:id')
-  async getContentReleaseById(@Param('id') id: string): Promise<ContentRelease> {
-    return this.coursesService.getContentReleaseById(id);
+  async getContentReleaseById(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<ContentRelease> {
+    return this.coursesService.getContentReleaseById(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Put('content-releases/:id')
@@ -1385,7 +1483,10 @@ export class CoursesController {
       isActive: boolean;
       updatedBy: string;
     },
+    @Req() request: Request,
   ): Promise<ContentRelease> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.updateContentRelease(
       id,
       body.contentType,
@@ -1394,55 +1495,101 @@ export class CoursesController {
       body.releaseDate,
       body.releaseConditions,
       body.isActive,
-      body.updatedBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Delete('content-releases/:id')
-  async deleteContentRelease(@Param('id') id: string): Promise<void> {
-    return this.coursesService.deleteContentRelease(id);
+  async deleteContentRelease(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<void> {
+    return this.coursesService.deleteContentRelease(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Post('content-releases/:id/release')
   async releaseContentManually(
     @Param('id') id: string,
-    @Body() body: { releasedBy: string },
+    @Req() request: Request,
   ): Promise<ContentRelease> {
-    return this.coursesService.releaseContentManually(id, body.releasedBy);
+    const actorUserId = this.getActorUserId(request);
+
+    return this.coursesService.releaseContentManually(
+      id,
+      actorUserId,
+      actorUserId,
+    );
   }
 
   @Post('courses/:courseId/check-automatic-releases')
   async checkAutomaticReleases(
     @Param('courseId') courseId: string,
+    @Req() request: Request,
   ): Promise<ContentRelease[]> {
-    return this.coursesService.checkAutomaticReleases(courseId);
+    return this.coursesService.checkAutomaticReleases(
+      courseId,
+      this.getActorUserId(request),
+    );
   }
 
   @Post('courses/:courseId/enrollments/:enrollmentId/check-progress-releases')
   async checkProgressBasedReleases(
     @Param('courseId') courseId: string,
     @Param('enrollmentId') enrollmentId: string,
+    @Req() request: Request,
   ): Promise<ContentRelease[]> {
-    return this.coursesService.checkProgressBasedReleases(courseId, enrollmentId);
+    return this.coursesService.checkProgressBasedReleases(
+      courseId,
+      enrollmentId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('courses/:courseId/enrollments/:enrollmentId/released-content')
   async getReleasedContentForEnrollment(
     @Param('courseId') courseId: string,
     @Param('enrollmentId') enrollmentId: string,
+    @Req() request: Request,
   ): Promise<any[]> {
     return this.coursesService.getReleasedContentForEnrollment(
       courseId,
       enrollmentId,
+      this.getActorUserId(request),
+    );
+  }
+
+  @Get('courses/:courseId/enrollments/:enrollmentId/content-release-status')
+  async getContentReleaseStatusForEnrollment(
+    @Param('courseId') courseId: string,
+    @Param('enrollmentId') enrollmentId: string,
+    @Req() request: Request,
+  ): Promise<any> {
+    return this.coursesService.getContentReleaseStatus(
+      courseId,
+      enrollmentId,
+      this.getActorUserId(request),
     );
   }
 
   @Get('courses/:courseId/content-release-status')
   async getContentReleaseStatus(
     @Param('courseId') courseId: string,
-    @Param('enrollmentId') enrollmentId: string,
+    @Query('enrollmentId') enrollmentId: string | undefined,
+    @Req() request: Request,
   ): Promise<any> {
-    return this.coursesService.getContentReleaseStatus(courseId, enrollmentId);
+    if (!enrollmentId) {
+      throw new ApiValidationError('enrollmentId query parameter is required');
+    }
+
+    return this.coursesService.getContentReleaseStatus(
+      courseId,
+      enrollmentId,
+      this.getActorUserId(request),
+    );
   }
 
   // Content Template endpoints
@@ -1458,7 +1605,10 @@ export class CoursesController {
       isGlobal: boolean;
       createdBy: string;
     },
+    @Req() request: Request,
   ): Promise<ContentTemplate> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.createContentTemplate(
       courseId,
       body.name,
@@ -1467,25 +1617,40 @@ export class CoursesController {
       body.templateData,
       body.placeholders,
       body.isGlobal,
-      body.createdBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Get(':courseId/content-templates')
   async getContentTemplatesByCourse(
     @Param('courseId') courseId: string,
+    @Req() request: Request,
   ): Promise<ContentTemplate[]> {
-    return this.coursesService.getContentTemplatesByCourse(courseId);
+    return this.coursesService.getContentTemplatesByCourse(
+      courseId,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('content-templates/global')
-  async getGlobalContentTemplates(): Promise<ContentTemplate[]> {
-    return this.coursesService.getGlobalContentTemplates();
+  async getGlobalContentTemplates(
+    @Req() request: Request,
+  ): Promise<ContentTemplate[]> {
+    return this.coursesService.getGlobalContentTemplates(
+      this.getActorUserId(request),
+    );
   }
 
   @Get('content-templates/:id')
-  async getContentTemplateById(@Param('id') id: string): Promise<ContentTemplate> {
-    return this.coursesService.getContentTemplateById(id);
+  async getContentTemplateById(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<ContentTemplate> {
+    return this.coursesService.getContentTemplateById(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Put('content-templates/:id')
@@ -1501,7 +1666,10 @@ export class CoursesController {
       isGlobal: boolean;
       updatedBy: string;
     },
+    @Req() request: Request,
   ): Promise<ContentTemplate> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.updateContentTemplate(
       id,
       body.name,
@@ -1511,33 +1679,47 @@ export class CoursesController {
       body.placeholders,
       body.isActive,
       body.isGlobal,
-      body.updatedBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Delete('content-templates/:id')
-  async deleteContentTemplate(@Param('id') id: string): Promise<void> {
-    return this.coursesService.deleteContentTemplate(id);
+  async deleteContentTemplate(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<void> {
+    return this.coursesService.deleteContentTemplate(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Post('courses/:courseId/templates/:templateId/apply')
   async applyTemplateToCourse(
     @Param('courseId') courseId: string,
     @Param('templateId') templateId: string,
-    @Body() body: { appliedBy: string },
+    @Req() request: Request,
   ): Promise<any> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.applyTemplateToCourse(
       templateId,
       courseId,
-      body.appliedBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Get('courses/:courseId/available-templates')
   async getAvailableTemplatesForCourse(
     @Param('courseId') courseId: string,
+    @Req() request: Request,
   ): Promise<ContentTemplate[]> {
-    return this.coursesService.getAvailableTemplatesForCourse(courseId);
+    return this.coursesService.getAvailableTemplatesForCourse(
+      courseId,
+      this.getActorUserId(request),
+    );
   }
 
   // Search endpoints
@@ -1761,7 +1943,10 @@ export class CoursesController {
       relatedContentType: string;
       createdBy: string;
     },
+    @Req() request: Request,
   ): Promise<CalendarEvent> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.createCalendarEvent(
       courseId,
       body.title,
@@ -1776,26 +1961,35 @@ export class CoursesController {
       body.recurrencePattern,
       body.relatedContentId,
       body.relatedContentType,
-      body.createdBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Get(':courseId/calendar/events')
   async getCalendarEventsByCourse(
     @Param('courseId') courseId: string,
-    @Param('startDate') startDate: Date,
-    @Param('endDate') endDate: Date,
+    @Query('startDate') startDate: Date,
+    @Query('endDate') endDate: Date,
+    @Req() request: Request,
   ): Promise<CalendarEvent[]> {
     return this.coursesService.getCalendarEventsByCourse(
       courseId,
       startDate,
       endDate,
+      this.getActorUserId(request),
     );
   }
 
   @Get('calendar/events/:id')
-  async getCalendarEventById(@Param('id') id: string): Promise<CalendarEvent> {
-    return this.coursesService.getCalendarEventById(id);
+  async getCalendarEventById(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<CalendarEvent> {
+    return this.coursesService.getCalendarEventById(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Put('calendar/events/:id')
@@ -1816,7 +2010,10 @@ export class CoursesController {
       relatedContentType: string;
       updatedBy: string;
     },
+    @Req() request: Request,
   ): Promise<CalendarEvent> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.updateCalendarEvent(
       id,
       body.title,
@@ -1831,65 +2028,103 @@ export class CoursesController {
       body.recurrencePattern,
       body.relatedContentId,
       body.relatedContentType,
-      body.updatedBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Delete('calendar/events/:id')
-  async deleteCalendarEvent(@Param('id') id: string): Promise<void> {
-    return this.coursesService.deleteCalendarEvent(id);
+  async deleteCalendarEvent(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<void> {
+    return this.coursesService.deleteCalendarEvent(
+      id,
+      this.getActorUserId(request),
+    );
   }
 
   @Post('courses/:courseId/calendar/assignment-events')
   async createAssignmentDueDateEvents(
     @Param('courseId') courseId: string,
-    @Body() body: { createdBy: string },
+    @Req() request: Request,
   ): Promise<CalendarEvent[]> {
+    const actorUserId = this.getActorUserId(request);
+
     return this.coursesService.createAssignmentDueDateEvents(
       courseId,
-      body.createdBy,
+      actorUserId,
+      actorUserId,
     );
   }
 
   @Get('courses/:courseId/calendar/upcoming')
   async getUpcomingEvents(
     @Param('courseId') courseId: string,
-    @Param('limit') limit: number = 5,
+    @Query('limit') limit: number = 5,
+    @Req() request: Request,
   ): Promise<CalendarEvent[]> {
-    return this.coursesService.getUpcomingEvents(courseId, limit);
+    return this.coursesService.getUpcomingEvents(
+      courseId,
+      limit,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('courses/:courseId/calendar/range')
   async getEventsByDateRange(
     @Param('courseId') courseId: string,
-    @Param('startDate') startDate: Date,
-    @Param('endDate') endDate: Date,
+    @Query('startDate') startDate: Date,
+    @Query('endDate') endDate: Date,
+    @Req() request: Request,
   ): Promise<CalendarEvent[]> {
-    return this.coursesService.getEventsByDateRange(courseId, startDate, endDate);
+    return this.coursesService.getEventsByDateRange(
+      courseId,
+      startDate,
+      endDate,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('courses/:courseId/calendar/daily')
   async getDailyEvents(
     @Param('courseId') courseId: string,
-    @Param('date') date: Date,
+    @Query('date') date: Date,
+    @Req() request: Request,
   ): Promise<CalendarEvent[]> {
-    return this.coursesService.getDailyEvents(courseId, date);
+    return this.coursesService.getDailyEvents(
+      courseId,
+      date,
+      this.getActorUserId(request),
+    );
   }
 
   @Get('courses/:courseId/calendar/monthly')
   async getMonthlyEvents(
     @Param('courseId') courseId: string,
-    @Param('year') year: number,
-    @Param('month') month: number,
+    @Query('year') year: number,
+    @Query('month') month: number,
+    @Req() request: Request,
   ): Promise<CalendarEvent[]> {
-    return this.coursesService.getMonthlyEvents(courseId, year, month);
+    return this.coursesService.getMonthlyEvents(
+      courseId,
+      year,
+      month,
+      this.getActorUserId(request),
+    );
   }
 
   @Post('courses/:courseId/calendar/sync-assignments')
   async syncAssignmentDueDates(
     @Param('courseId') courseId: string,
-    @Body() body: { createdBy: string },
+    @Req() request: Request,
   ): Promise<{ created: CalendarEvent[]; deleted: number }> {
-    return this.coursesService.syncAssignmentDueDates(courseId, body.createdBy);
+    const actorUserId = this.getActorUserId(request);
+
+    return this.coursesService.syncAssignmentDueDates(
+      courseId,
+      actorUserId,
+      actorUserId,
+    );
   }
 }

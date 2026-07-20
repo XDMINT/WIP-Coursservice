@@ -117,6 +117,23 @@
           :grading-mode="task.gradingMode"
           :max-points="task.maxPoints"
         />
+
+        <aside
+          v-if="reflection"
+          class="journey-step__reflection"
+        >
+          <div class="journey-step__reflection-icon">
+            <v-icon size="20">
+              {{ reflection.icon }}
+            </v-icon>
+          </div>
+          <div>
+            <strong>Rückblick</strong>
+            <p>Ergebnis: {{ reflection.resultLabel }}</p>
+            <span>{{ reflection.message }}</span>
+            <span v-if="reflection.detail">{{ reflection.detail }}</span>
+          </div>
+        </aside>
       </template>
 
       <div
@@ -167,12 +184,14 @@ import {
 import { getTaskStatusPresentation } from '@/services/statusPresentation'
 import JourneyAssessmentStatus from './JourneyAssessmentStatus.vue'
 import JourneyMaterialList from './JourneyMaterialList.vue'
+import type { LearningStepReflection } from './getNextLearningAction'
 
 export type JourneyTaskAction = 'start' | 'self-confirm' | 'open-submission' | 'mock-evaluate'
 
 const props = defineProps<{
   isNext?: boolean
   materials: LearningMaterial[]
+  reflection?: LearningStepReflection | null
   task: StudentLearningTask
 }>()
 
@@ -398,6 +417,44 @@ const formatFileSize = (size: number): string => {
 
 .journey-step__submission p {
   margin: 0;
+}
+
+.journey-step__reflection {
+  align-items: flex-start;
+  background: rgba(var(--v-theme-surface-variant), 0.24);
+  border: 1px solid rgba(var(--v-theme-outline), 0.24);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+}
+
+.journey-step__reflection-icon {
+  align-items: center;
+  background: rgba(var(--v-theme-primary), 0.1);
+  border-radius: 8px;
+  color: rgb(var(--v-theme-primary));
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.journey-step__reflection strong {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.journey-step__reflection p,
+.journey-step__reflection span {
+  color: rgb(var(--v-theme-on-surface-variant));
+  display: block;
+  font-size: 0.9rem;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .journey-step__submission a,

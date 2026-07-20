@@ -63,7 +63,6 @@ onMounted(() => {
   _checkCompability()
   window.addEventListener('resize', _checkCompability)
 
-  // log token parameter
   const jsessionid = router.currentRoute.value.query.jsessionid?.toString()
   const isIframe: boolean = router.currentRoute.value.query.iframe?.toString().toLowerCase() === 'true'
 
@@ -72,7 +71,6 @@ onMounted(() => {
   }
 
   if (isIframe === true) {
-    console.log('Iframe detected')
     pageSettingsStore.showHeader = false
   }
 })
@@ -107,9 +105,8 @@ const tokenLogin = (jsessionid: string) => {
       .then(() => {
         router.push('/')
       })
-      .catch((error) => {
+      .catch(() => {
         loading.value = false
-        console.log(error)
         errorMessage.value = 'Token Login fehlgeschlagen'
       })
   }
@@ -137,7 +134,6 @@ const localLogin = () => {
         })
         .catch((error) => {
           loading.value = false
-          console.log(error)
           errorMessage.value = error instanceof Error ? error.message : 'Login fehlgeschlagen'
         })
     } else {

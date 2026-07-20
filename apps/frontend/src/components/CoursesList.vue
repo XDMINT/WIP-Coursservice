@@ -487,11 +487,10 @@ import GlobalRoles from '@/enums/GlobalRoles'
 import CourseRoles from '@/enums/CourseRoles'
 import learningTaskService, {
   TaskAssessmentStatus,
-  TaskGradingMode,
   TaskProgressStatus,
-  type LearningPath,
-  type StudentLearningTask
+  type LearningPath
 } from '@/services/learningTask.service'
+import { getNextLearningAction } from '@/components/course/getNextLearningAction'
 
 type StudentCourseProgress = {
   completedTasks: number
@@ -612,7 +611,6 @@ const loadActiveVersions = async (courses: CourseAndParticipationPL[]) => {
 }
 
 const mapLearningPathToProgress = (learningPath: LearningPath): StudentCourseProgress => {
-  const nextTask = findNextTask(learningPath.tasks)
   const openTaskCount = learningPath.tasks.filter((task) =>
     [TaskProgressStatus.AVAILABLE, TaskProgressStatus.IN_PROGRESS, TaskProgressStatus.SUBMITTED].includes(task.status)
   ).length
@@ -626,7 +624,7 @@ const mapLearningPathToProgress = (learningPath: LearningPath): StudentCoursePro
     completedTasks: learningPath.completedTasks,
     hasFeedback: learningPath.tasks.some((task) => Boolean(task.assessment?.feedback)),
     loading: false,
-    nextAction: nextActionForTask(nextTask, learningPath),
+    nextAction: getNextLearningAction(learningPath.tasks).message,
     progressPercentage: learningPath.progressPercentage,
     taskHint: pendingReviewCount > 0
       ? `${pendingReviewCount} Abgabe${pendingReviewCount === 1 ? '' : 'n'} wartet auf Bewertung`
@@ -646,37 +644,6 @@ const emptyStudentProgress = (nextAction = 'Kurs öffnen'): StudentCourseProgres
   taskHint: '',
   totalTasks: 0
 })
-
-const findNextTask = (tasks: StudentLearningTask[]) =>
-  [...tasks]
-    .sort((left, right) => left.order - right.order)
-    .find((task) =>
-      task.status === TaskProgressStatus.IN_PROGRESS ||
-      task.status === TaskProgressStatus.AVAILABLE ||
-      task.status === TaskProgressStatus.SUBMITTED ||
-      (task.status === TaskProgressStatus.FAILED && task.allowRetries) ||
-      task.status === TaskProgressStatus.LOCKED
-    ) ?? null
-
-const nextActionForTask = (task: StudentLearningTask | null, learningPath: LearningPath): string => {
-  if (!task) {
-    return learningPath.totalTasks > 0 ? 'Feedback ansehen' : 'Kurs öffnen'
-  }
-
-  if (task.status === TaskProgressStatus.SUBMITTED) {
-    return `Feedback ansehen: ${task.title}`
-  }
-
-  if (task.status === TaskProgressStatus.LOCKED) {
-    return `Nächster Schritt gesperrt: ${task.title}`
-  }
-
-  if (task.gradingMode === TaskGradingMode.MANUAL) {
-    return `Nächster Schritt: ${task.title}`
-  }
-
-  return `Nächster Schritt: ${task.title}`
-}
 
 const filterCourses = (courses: CourseAndParticipationPL[]) => {
   const normalizedSearch = search.value.trim().toLowerCase()
@@ -921,9 +888,10 @@ defineExpose({
 }
 
 .management-row {
+  align-items: flex-start;
   display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(420px, 1.8fr) minmax(300px, auto);
+  gap: 16px;
+  grid-template-columns: minmax(240px, 1.05fr) minmax(360px, 1.55fr) minmax(360px, 1fr);
   padding: 14px;
 }
 
@@ -933,40 +901,83 @@ defineExpose({
   gap: 10px;
   min-width: 0;
 
+  > div {
+    min-width: 0;
+  }
+
   h3 {
     font-size: 1rem;
     font-weight: 600;
+    line-height: 1.3;
     margin: 0 0 4px;
+    overflow-wrap: anywhere;
   }
 
   p {
     color: rgb(var(--v-theme-on-surface-variant));
+    line-height: 1.35;
     margin: 0;
     overflow-wrap: anywhere;
+  }
+
+  :deep(.v-chip) {
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 26px;
+    max-width: 100%;
+  }
+
+  :deep(.v-chip__content) {
+    line-height: 1.2;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 }
 
 .management-row__meta {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  min-width: 0;
 
   span {
     color: rgb(var(--v-theme-on-surface-variant));
     display: block;
     font-size: 0.78rem;
+    line-height: 1.25;
   }
 
   strong {
     display: block;
     font-size: 0.9rem;
     font-weight: 600;
+    line-height: 1.3;
     margin-top: 2px;
+    overflow-wrap: anywhere;
   }
 }
 
 .management-row__actions {
+  align-items: flex-start;
   justify-content: flex-end;
+  min-width: 0;
+}
+
+.management-row__actions :deep(.v-btn) {
+  flex: 0 1 auto;
+  height: auto;
+  min-height: 36px;
+  max-width: 100%;
+  padding-block: 6px;
+}
+
+.management-row__actions :deep(.v-btn__content) {
+  line-height: 1.2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+  white-space: normal;
 }
 
 @media (max-width: 1180px) {
@@ -1000,6 +1011,25 @@ defineExpose({
 
   .management-row__meta {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .management-row {
+    padding: 12px;
+  }
+
+  .management-row__title {
+    flex-direction: column;
+  }
+
+  .management-row__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .management-row__actions :deep(.v-btn) {
+    width: 100%;
   }
 }
 </style>

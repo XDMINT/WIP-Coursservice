@@ -152,7 +152,6 @@ const refreshTextFields = () => {
   courseSemester.value = course.value.semester.name
 }
 
-// TODO
 const _confirm = async () => {
   loading.value = true
 
@@ -170,7 +169,6 @@ const _confirm = async () => {
         .catch((error) => {
           snackbarFailMessage.value = getApiErrorMessage(error)
           snackbarFail.value = true
-          console.log(error)
         })
     } else {
       courseService

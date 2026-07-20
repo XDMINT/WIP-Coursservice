@@ -116,7 +116,6 @@ const showSnackbarError = (message: string) => {
 }
 
 const kickUser = (user: any) => {
-  console.log(user)
   if (dialogConfirm.value) {
     dialogConfirm.value.openDialog(`Entferne Nutzer: ${user.firstName} ${user.lastName}`, 'Wollen Sie den Nutzer wirklich aus dem Kurs entfernen?', 'Entfernen').then((result: boolean) => {
       if (result) {
