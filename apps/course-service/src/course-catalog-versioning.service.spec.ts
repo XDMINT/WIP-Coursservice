@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 
 import { CoursesService } from './courses.service';
+import { CourseRepositories } from './persistence/course-repositories';
 import { Assignment } from './entities/assignment.entity';
 import { CourseResult } from './entities/course-result.entity';
 import { Course, CourseRunTemplateStrategy, CourseStatus } from './entities/course.entity';
@@ -524,22 +525,24 @@ const createFixture = () => {
   const taskAssessmentRepository = createRepository([], 'assessment');
   const taskProgressRepository = createRepository<TaskProgress>([], 'progress');
   const service = new CoursesService(
-    courseRepository as any,
-    courseRunRepository as any,
-    courseVersionRepository as any,
-    materialRepository as any,
-    assignmentRepository as any,
-    emptyRepository() as any,
-    courseResultRepository as any,
-    enrollmentRepository as any,
-    taskRepository as any,
-    taskAssessmentRepository as any,
-    taskProgressRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
+    new CourseRepositories({
+      assignments: assignmentRepository as any,
+      calendarEvents: emptyRepository() as any,
+      contentReleases: emptyRepository() as any,
+      contentTemplates: emptyRepository() as any,
+      courseGroups: emptyRepository() as any,
+      courseResults: courseResultRepository as any,
+      courseRuns: courseRunRepository as any,
+      courses: courseRepository as any,
+      courseVersions: courseVersionRepository as any,
+      enrollments: enrollmentRepository as any,
+      grades: emptyRepository() as any,
+      groupMemberships: emptyRepository() as any,
+      learningMaterials: materialRepository as any,
+      taskAssessments: taskAssessmentRepository as any,
+      taskProgress: taskProgressRepository as any,
+      tasks: taskRepository as any,
+    }),
     {
       deleteFile: jest.fn(),
       openFile: jest.fn(),

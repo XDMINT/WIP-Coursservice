@@ -1,42 +1,11 @@
-import { IsNull, LessThanOrEqual, MoreThanOrEqual, Not } from 'typeorm';
+import { CourseDomainService } from './course-domain.service';
 import { ApiNotFoundError } from '../common/api-errors';
 import { CoursePermission } from '../courses.permissions';
 import { CalendarEvent } from '../entities/calendar-event.entity';
 import { Course } from '../entities/course.entity';
 
-type CourseServiceFacade = any;
 
-export class CalendarEventService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class CalendarEventService extends CourseDomainService {
 
   private async assertCourseReadable(
     courseId: string,
@@ -71,7 +40,7 @@ export class CalendarEventService {
   }
 
   private async findEventWithCourseOrThrow(id: string): Promise<CalendarEvent> {
-    const event = await this.calendarEventRepository.findOne({
+    const event = await this.repositories.calendarEvents.findOne({
       where: { id },
       relations: ['course'],
     });
@@ -123,7 +92,7 @@ export class CalendarEventService {
     course.id = courseId;
     event.course = course;
 
-    return this.calendarEventRepository.save(event);
+    return this.repositories.calendarEvents.save(event);
   }
 
   async getCalendarEventsByCourse(
@@ -134,11 +103,11 @@ export class CalendarEventService {
   ): Promise<CalendarEvent[]> {
     await this.assertCourseReadable(courseId, actorUserId);
 
-    return this.calendarEventRepository.find({
+    return this.repositories.calendarEvents.find({
       where: {
         course: { id: courseId },
-        startTime: LessThanOrEqual(endDate),
-        endTime: MoreThanOrEqual(startDate),
+        startTime: this.repositories.lessThanOrEqual(endDate),
+        endTime: this.repositories.moreThanOrEqual(startDate),
       },
       order: { startTime: 'ASC' },
     });
@@ -188,7 +157,7 @@ export class CalendarEventService {
     event.relatedContentType = relatedContentType;
     event.updatedBy = actorId ?? updatedBy;
 
-    return this.calendarEventRepository.save(event);
+    return this.repositories.calendarEvents.save(event);
   }
 
   async deleteCalendarEvent(
@@ -198,7 +167,7 @@ export class CalendarEventService {
     const event = await this.findEventWithCourseOrThrow(id);
     await this.assertCourseManageable(event.course.id, actorUserId);
 
-    await this.calendarEventRepository.delete(id);
+    await this.repositories.calendarEvents.delete(id);
   }
 
   async createAssignmentDueDateEvents(
@@ -208,10 +177,10 @@ export class CalendarEventService {
   ): Promise<CalendarEvent[]> {
     const actorId = await this.assertCourseManageable(courseId, actorUserId);
     const creatorId = actorId ?? createdBy;
-    const assignments = await this.assignmentRepository.find({
+    const assignments = await this.repositories.assignments.find({
       where: {
         course: { id: courseId },
-        dueDate: Not(IsNull()),
+        dueDate: this.repositories.not(this.repositories.isNull()),
       },
     });
 
@@ -219,7 +188,7 @@ export class CalendarEventService {
 
     for (const assignment of assignments) {
       // Check if event already exists for this assignment
-      const existingEvent = await this.calendarEventRepository.findOne({
+      const existingEvent = await this.repositories.calendarEvents.findOne({
         where: {
           relatedContentId: assignment.id,
           relatedContentType: 'ASSIGNMENT',
@@ -261,11 +230,11 @@ export class CalendarEventService {
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 30); // Next 30 days
 
-    return this.calendarEventRepository.find({
+    return this.repositories.calendarEvents.find({
       where: {
         course: { id: courseId },
-        startTime: MoreThanOrEqual(now),
-        endTime: LessThanOrEqual(futureDate),
+        startTime: this.repositories.moreThanOrEqual(now),
+        endTime: this.repositories.lessThanOrEqual(futureDate),
       },
       order: { startTime: 'ASC' },
       take: limit,
@@ -280,11 +249,11 @@ export class CalendarEventService {
   ): Promise<CalendarEvent[]> {
     await this.assertCourseReadable(courseId, actorUserId);
 
-    return this.calendarEventRepository.find({
+    return this.repositories.calendarEvents.find({
       where: {
         course: { id: courseId },
-        startTime: LessThanOrEqual(endDate),
-        endTime: MoreThanOrEqual(startDate),
+        startTime: this.repositories.lessThanOrEqual(endDate),
+        endTime: this.repositories.moreThanOrEqual(startDate),
       },
       order: { startTime: 'ASC' },
     });
@@ -303,18 +272,18 @@ export class CalendarEventService {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    return this.calendarEventRepository.find({
+    return this.repositories.calendarEvents.find({
       where: [
         {
           course: { id: courseId },
-          startTime: LessThanOrEqual(endOfDay),
-          endTime: MoreThanOrEqual(startOfDay),
+          startTime: this.repositories.lessThanOrEqual(endOfDay),
+          endTime: this.repositories.moreThanOrEqual(startOfDay),
         },
         {
           course: { id: courseId },
           isAllDay: true,
-          startTime: LessThanOrEqual(endOfDay),
-          endTime: MoreThanOrEqual(startOfDay),
+          startTime: this.repositories.lessThanOrEqual(endOfDay),
+          endTime: this.repositories.moreThanOrEqual(startOfDay),
         },
       ],
       order: { startTime: 'ASC' },
@@ -332,11 +301,11 @@ export class CalendarEventService {
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59, 999);
 
-    return this.calendarEventRepository.find({
+    return this.repositories.calendarEvents.find({
       where: {
         course: { id: courseId },
-        startTime: LessThanOrEqual(endDate),
-        endTime: MoreThanOrEqual(startDate),
+        startTime: this.repositories.lessThanOrEqual(endDate),
+        endTime: this.repositories.moreThanOrEqual(startDate),
       },
       order: { startTime: 'ASC' },
     });
@@ -351,15 +320,15 @@ export class CalendarEventService {
     const creatorId = actorId ?? createdBy;
 
     // Get all assignments with due dates
-    const assignments = await this.assignmentRepository.find({
+    const assignments = await this.repositories.assignments.find({
       where: {
         course: { id: courseId },
-        dueDate: Not(IsNull()),
+        dueDate: this.repositories.not(this.repositories.isNull()),
       },
     });
 
     // Get all existing assignment-related events
-    const existingEvents = await this.calendarEventRepository.find({
+    const existingEvents = await this.repositories.calendarEvents.find({
       where: {
         course: { id: courseId },
         relatedContentType: 'ASSIGNMENT',

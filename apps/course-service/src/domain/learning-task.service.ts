@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
+import { CourseDomainService } from './course-domain.service';
 import { randomUUID } from 'crypto';
-import { In, Repository } from 'typeorm';
+import { EntityRepositoryPort } from '../persistence/repository-port';
 import { CoursePermission, hasCoursePermission } from '../courses.permissions';
 import { ApiForbiddenError, ApiNotFoundError, ApiValidationError } from '../common/api-errors';
 import {
@@ -54,7 +55,6 @@ import {
   calculateTaskAssessmentPassed,
 } from '../task-assessment.rules';
 
-type CourseServiceFacade = any;
 
 type UploadedLearningMaterialFile = {
   originalname?: string;
@@ -78,37 +78,7 @@ type TaskSubmissionFileData = {
   uploadedAt?: string;
 };
 
-export class LearningTaskService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class LearningTaskService extends CourseDomainService {
 
   private parseBooleanLike(value: unknown): boolean {
     return value === true || value === 'true' || value === '1' || value === 1;
@@ -294,7 +264,7 @@ export class LearningTaskService {
     const activeVersion = enrollment.courseRunId
       ? await this.getActiveCourseVersionForRunOrThrow(courseId, enrollment.courseRunId)
       : null;
-    const immediateTasks = await this.taskRepository.find({
+    const immediateTasks = await this.repositories.tasks.find({
       where: {
         courseId,
         courseRunId: enrollment.courseRunId,
@@ -456,7 +426,7 @@ export class LearningTaskService {
   }
 
   private async findLearningTaskOrThrow(taskId: string): Promise<Task> {
-    const task = await this.taskRepository.findOne({
+    const task = await this.repositories.tasks.findOne({
       where: { id: taskId },
     });
 
@@ -559,7 +529,7 @@ export class LearningTaskService {
       throw new ApiValidationError('A task cannot depend on itself');
     }
 
-    const prerequisite = await this.taskRepository.findOne({
+    const prerequisite = await this.repositories.tasks.findOne({
       where: { id: prerequisiteTaskId },
     });
 
@@ -587,7 +557,7 @@ export class LearningTaskService {
 
       visitedTaskIds.add(currentTaskId);
 
-      const currentTask = await this.taskRepository.findOne({
+      const currentTask = await this.repositories.tasks.findOne({
         where: { id: currentTaskId },
       });
 
@@ -617,12 +587,12 @@ export class LearningTaskService {
     }
 
     const [prerequisite, prerequisiteProgress] = await Promise.all([
-      this.taskRepository.findOne({
+      this.repositories.tasks.findOne({
         where: {
           id: task.prerequisiteTaskId,
         },
       }),
-      this.taskProgressRepository.findOne({
+      this.repositories.taskProgress.findOne({
         where: {
           taskId: task.prerequisiteTaskId,
           enrollmentId,
@@ -669,7 +639,7 @@ export class LearningTaskService {
     taskId: string,
     enrollmentId: string,
   ): Promise<TaskProgress | null> {
-    return this.taskProgressRepository.findOne({
+    return this.repositories.taskProgress.findOne({
       where: {
         taskId,
         enrollmentId,
@@ -681,7 +651,7 @@ export class LearningTaskService {
     task: Task,
     studentId: string | number,
   ): Promise<TaskAssessment | null> {
-    return this.taskAssessmentRepository.findOne({
+    return this.repositories.taskAssessments.findOne({
       where: {
         courseRunId: task.courseRunId,
         taskId: task.id,
@@ -691,19 +661,19 @@ export class LearningTaskService {
     });
   }
 
-  private getGroupTaskProgressRepository(): Repository<GroupTaskProgress> {
-    if (!this.groupTaskProgressRepository) {
+  private getGroupTaskProgressStore(): EntityRepositoryPort<GroupTaskProgress> {
+    if (!this.repositories.groupTaskProgress) {
       throw new Error('Group task progress repository is not configured');
     }
 
-    return this.groupTaskProgressRepository;
+    return this.repositories.groupTaskProgress;
   }
 
   private async findGroupTaskAssessment(
     task: Task,
     groupId: string,
   ): Promise<TaskAssessment | null> {
-    return this.taskAssessmentRepository.findOne({
+    return this.repositories.taskAssessments.findOne({
       where: {
         courseRunId: task.courseRunId,
         taskId: task.id,
@@ -781,7 +751,7 @@ export class LearningTaskService {
   private async saveTaskAssessment(
     assessment: TaskAssessment,
   ): Promise<TaskAssessment> {
-    return this.taskAssessmentRepository.save(assessment);
+    return this.repositories.taskAssessments.save(assessment);
   }
 
   private async findStudentEnrollmentForRunOrThrow(
@@ -825,7 +795,7 @@ export class LearningTaskService {
     groupId: string,
     relations: string[] = ['memberships'],
   ): Promise<CourseGroup> {
-    const group = await this.courseGroupRepository.findOne({
+    const group = await this.repositories.courseGroups.findOne({
       where: {
         id: groupId,
         course_id: courseId,
@@ -845,7 +815,7 @@ export class LearningTaskService {
     runId: string,
     studentId: string | number,
   ): Promise<CourseGroup | null> {
-    const memberships = await this.groupMembershipRepository.find({
+    const memberships = await this.repositories.groupMemberships.find({
       where: {
         user_id: this.toUserId(studentId),
       },
@@ -881,7 +851,7 @@ export class LearningTaskService {
     group: CourseGroup,
     actorId = 'system',
   ): Promise<GroupTaskProgress> {
-    const repository = this.getGroupTaskProgressRepository();
+    const repository = this.getGroupTaskProgressStore();
     let progress = await repository.findOne({
       where: {
         courseRunId: task.courseRunId,
@@ -937,7 +907,7 @@ export class LearningTaskService {
   ): Promise<void> {
     const members = group.memberships?.length
       ? group.memberships
-      : await this.groupMembershipRepository.find({
+      : await this.repositories.groupMemberships.find({
         where: { group_id: group.id },
       });
 
@@ -957,7 +927,7 @@ export class LearningTaskService {
       progress.resultPassed = assessment?.passed ?? undefined;
       progress.resultRecordedAt = assessment?.assessedAt ?? undefined;
       progress.updatedBy = actorId;
-      await this.taskProgressRepository.save(progress);
+      await this.repositories.taskProgress.save(progress);
 
       if (assessment?.passed === true) {
         await this.unlockEligibleNextTasks(task, enrollment);
@@ -968,7 +938,7 @@ export class LearningTaskService {
   private async loadGroupTaskProgressDtos(
     group: CourseGroup,
   ) {
-    const repository = this.getGroupTaskProgressRepository();
+    const repository = this.getGroupTaskProgressStore();
     const progressList = await repository.find({
       where: {
         groupId: group.id,
@@ -978,11 +948,11 @@ export class LearningTaskService {
       },
     });
     const assessments: TaskAssessment[] = progressList.length > 0
-      ? await this.taskAssessmentRepository.find({
+      ? await this.repositories.taskAssessments.find({
         where: {
           assessmentTargetType: TaskAssessmentTargetType.GROUP,
           groupId: group.id,
-          taskId: In(progressList.map((progress) => progress.taskId)),
+          taskId: this.repositories.in(progressList.map((progress) => progress.taskId)),
         },
       })
       : [];
@@ -999,7 +969,7 @@ export class LearningTaskService {
     task: Task,
     groupId: string,
   ): Promise<GroupTaskProgress | null> {
-    return this.getGroupTaskProgressRepository().findOne({
+    return this.getGroupTaskProgressStore().findOne({
       where: {
         courseRunId: task.courseRunId,
         taskId: task.id,
@@ -1036,7 +1006,7 @@ export class LearningTaskService {
     progress.updatedBy = createdBy;
     this.assignTaskProgressRelations(progress, task, enrollment);
 
-    return this.taskProgressRepository.save(progress);
+    return this.repositories.taskProgress.save(progress);
   }
 
   private async ensureTaskProgress(
@@ -1064,7 +1034,7 @@ export class LearningTaskService {
           : TaskUnlockSource.IMMEDIATE;
       progress.updatedBy = updatedBy;
 
-      return this.taskProgressRepository.save(progress);
+      return this.repositories.taskProgress.save(progress);
     }
 
     if (
@@ -1078,7 +1048,7 @@ export class LearningTaskService {
       progress.unlockSource = undefined;
       progress.updatedBy = updatedBy;
 
-      return this.taskProgressRepository.save(progress);
+      return this.repositories.taskProgress.save(progress);
     }
 
     if (
@@ -1092,7 +1062,7 @@ export class LearningTaskService {
       progress.unlockSource = undefined;
       progress.updatedBy = updatedBy;
 
-      return this.taskProgressRepository.save(progress);
+      return this.repositories.taskProgress.save(progress);
     }
 
     return progress;
@@ -1114,7 +1084,7 @@ export class LearningTaskService {
     if (task.unlockMode === TaskUnlockMode.AUTOMATIC && task.prerequisiteTaskId) {
       const prerequisite =
         tasksById.get(task.prerequisiteTaskId) ??
-        (await this.taskRepository.findOne({
+        (await this.repositories.tasks.findOne({
           where: { id: task.prerequisiteTaskId },
         }));
       const enrichedPrerequisite = prerequisite
@@ -1170,7 +1140,7 @@ export class LearningTaskService {
       courseId,
       runId,
     );
-    const taskReferences = await this.taskRepository.find({
+    const taskReferences = await this.repositories.tasks.find({
       where: {
         courseId,
         courseRunId: runId,
@@ -1296,7 +1266,7 @@ export class LearningTaskService {
   private async reconcileTaskProgressAfterConfigurationChange(
     task: Task,
   ): Promise<void> {
-    const progressList = await this.taskProgressRepository.find({
+    const progressList = await this.repositories.taskProgress.find({
       where: { taskId: task.id },
       relations: ['enrollment'],
     });
@@ -1316,7 +1286,7 @@ export class LearningTaskService {
     completedTask: Task,
     enrollment: Enrollment,
   ): Promise<void> {
-    const nextTasks = await this.taskRepository.find({
+    const nextTasks = await this.repositories.tasks.find({
       where: {
         courseId: completedTask.courseId,
         courseRunId: completedTask.courseRunId,
@@ -1352,7 +1322,7 @@ export class LearningTaskService {
       progress.completedAt = undefined;
       progress.resultPassed = undefined;
       progress.updatedBy = actorId;
-      await this.taskProgressRepository.save(progress);
+      await this.repositories.taskProgress.save(progress);
       return;
     }
 
@@ -1364,7 +1334,7 @@ export class LearningTaskService {
       progress.resultPassed = true;
       progress.resultRecordedAt = now;
       progress.updatedBy = actorId;
-      await this.taskProgressRepository.save(progress);
+      await this.repositories.taskProgress.save(progress);
       await this.unlockEligibleNextTasks(task, enrollment);
       return;
     }
@@ -1377,7 +1347,7 @@ export class LearningTaskService {
       progress.resultPassed = false;
       progress.resultRecordedAt = now;
       progress.updatedBy = actorId;
-      await this.taskProgressRepository.save(progress);
+      await this.repositories.taskProgress.save(progress);
     }
   }
 
@@ -1457,7 +1427,7 @@ export class LearningTaskService {
     task.updatedBy = actorId;
 
     const savedTask = this.applyTaskServiceContent(
-      await this.taskRepository.save(task),
+      await this.repositories.tasks.save(task),
       taskServiceTask,
     );
     await this.refreshCourseVersionContent(savedTask.courseVersionId);
@@ -1495,7 +1465,7 @@ export class LearningTaskService {
     const canManage = hasCoursePermission(role, CoursePermission.ManageCourseContent);
     const { run: currentRun, version } =
       await this.getActiveCourseVersionForCurrentRunOrThrow(normalizedCourseId);
-    const taskReferences = await this.taskRepository.find({
+    const taskReferences = await this.repositories.tasks.find({
       where: {
         courseId: normalizedCourseId,
         courseRunId: currentRun.id,
@@ -1525,7 +1495,7 @@ export class LearningTaskService {
       normalizedCourseId,
       run.id,
     );
-    const taskReferences = await this.taskRepository.find({
+    const taskReferences = await this.repositories.tasks.find({
       where: {
         courseId: normalizedCourseId,
         courseRunId: run.id,
@@ -1555,7 +1525,7 @@ export class LearningTaskService {
       run.id,
       versionId,
     );
-    const taskReferences = await this.taskRepository.find({
+    const taskReferences = await this.repositories.tasks.find({
       where: {
         courseId: normalizedCourseId,
         courseRunId: run.id,
@@ -1682,7 +1652,7 @@ export class LearningTaskService {
     task.updatedBy = actorId;
 
     const savedTask = this.applyTaskServiceContent(
-      await this.taskRepository.save(task),
+      await this.repositories.tasks.save(task),
       taskServiceTask,
     );
     await this.reconcileTaskProgressAfterConfigurationChange(savedTask);
@@ -1741,12 +1711,12 @@ export class LearningTaskService {
 
     const { run: currentRun, version } =
       await this.getActiveCourseVersionForCurrentRunOrThrow(normalizedCourseId);
-    const tasks = await this.taskRepository.find({
+    const tasks = await this.repositories.tasks.find({
       where: {
         courseId: normalizedCourseId,
         courseRunId: currentRun.id,
         courseVersionId: version.id,
-        id: In(body.items.map((item) => String(item.id ?? ''))),
+        id: this.repositories.in(body.items.map((item) => String(item.id ?? ''))),
       },
     });
     const tasksById = new Map<string, Task>(tasks.map((task: Task) => [task.id, task]));
@@ -1762,7 +1732,7 @@ export class LearningTaskService {
       task.updatedBy = actorId;
     }
 
-    const savedTasks = await this.taskRepository.save(tasks);
+    const savedTasks = await this.repositories.tasks.save(tasks);
     await this.refreshCourseVersionContent(version.id);
     await this.recordAuditEvent({
       eventType: AuditEventType.TASK_UPDATED,
@@ -1790,7 +1760,7 @@ export class LearningTaskService {
     const task = await this.findLearningTaskOrThrow(id);
     await this.assertTaskManageable(task, actorUserId);
 
-    const dependentTask = await this.taskRepository.findOne({
+    const dependentTask = await this.repositories.tasks.findOne({
       where: {
         prerequisiteTaskId: task.id,
         ...(task.courseVersionId ? { courseVersionId: task.courseVersionId } : {}),
@@ -1803,8 +1773,8 @@ export class LearningTaskService {
       );
     }
 
-    await this.taskRepository.delete(id);
-    const remainingReferences = await this.taskRepository.count({
+    await this.repositories.tasks.delete(id);
+    const remainingReferences = await this.repositories.tasks.count({
       where: { externalTaskId: task.externalTaskId },
     });
 
@@ -1890,7 +1860,7 @@ export class LearningTaskService {
       progress.completionPercentage = 25;
       progress.startedAt = progress.startedAt ?? new Date();
       progress.updatedBy = actorId;
-      await this.taskProgressRepository.save(progress);
+      await this.repositories.taskProgress.save(progress);
       await this.recordAuditEvent({
         eventType: AuditEventType.TASK_STARTED,
         actorUserId: actorId,
@@ -2000,7 +1970,7 @@ export class LearningTaskService {
     progress.resultRecordedAt = now;
     progress.updatedBy = actorUserId ? this.toUserId(actorUserId) : 'system';
 
-    await this.taskProgressRepository.save(progress);
+    await this.repositories.taskProgress.save(progress);
 
     if (gradingMode === TaskGradingMode.SELF_CONFIRMATION) {
       const assessment = await this.ensureTaskAssessment(task, enrollment);
@@ -2210,7 +2180,7 @@ export class LearningTaskService {
     actorUserId?: string | number,
   ): Promise<LearningMaterialDownload> {
     const actorId = this.requireActorUserId(actorUserId);
-    const assessment = await this.taskAssessmentRepository.findOne({
+    const assessment = await this.repositories.taskAssessments.findOne({
       where: { id: assessmentId },
       relations: ['task'],
     });
@@ -2469,7 +2439,7 @@ export class LearningTaskService {
     progress.resultPassed = undefined;
     progress.resultRecordedAt = undefined;
     progress.updatedBy = actorId;
-    await this.taskProgressRepository.save(progress);
+    await this.repositories.taskProgress.save(progress);
     await this.recordAuditEvent({
       eventType: AuditEventType.ASSESSMENT_RESET,
       actorUserId: actorId,
@@ -2515,7 +2485,7 @@ export class LearningTaskService {
       runId,
       actorUserId,
     );
-    const assessments = await this.taskAssessmentRepository.find({
+    const assessments = await this.repositories.taskAssessments.find({
       where: {
         courseRunId: run.id,
       },
@@ -2545,7 +2515,7 @@ export class LearningTaskService {
       throw new ApiValidationError('Die Aufgabe gehört nicht zu diesem Kursdurchlauf.');
     }
 
-    const assessments = await this.taskAssessmentRepository.find({
+    const assessments = await this.repositories.taskAssessments.find({
       where: {
         courseRunId: run.id,
         taskId,
@@ -2595,7 +2565,7 @@ export class LearningTaskService {
       progress.unlockedAt = progress.unlockedAt ?? new Date();
       progress.unlockSource = TaskUnlockSource.MANUAL;
       progress.updatedBy = actorId;
-      await this.taskProgressRepository.save(progress);
+      await this.repositories.taskProgress.save(progress);
       await this.recordAuditEvent({
         eventType: AuditEventType.PROGRESS_UPDATED,
         actorUserId: actorId,
@@ -2640,7 +2610,7 @@ export class LearningTaskService {
     courseId: string,
     runId: string,
   ): Promise<StudentProgressOverviewDto[]> {
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: {
         courseId,
         courseRunId: runId,
@@ -2712,7 +2682,7 @@ export class LearningTaskService {
     group.created_by = actorId;
     group.updated_by = actorId;
 
-    const savedGroup = await this.courseGroupRepository.save(group);
+    const savedGroup = await this.repositories.courseGroups.save(group);
     await this.recordAuditEvent({
       eventType: AuditEventType.PROGRESS_UPDATED,
       actorUserId: actorId,
@@ -2737,7 +2707,7 @@ export class LearningTaskService {
       runId,
       actorUserId,
     );
-    const groups = await this.courseGroupRepository.find({
+    const groups = await this.repositories.courseGroups.find({
       where: {
         course_id: normalizedCourseId,
         course_run_id: run.id,
@@ -2798,7 +2768,7 @@ export class LearningTaskService {
     }
 
     group.updated_by = actorId;
-    const savedGroup = await this.courseGroupRepository.save(group);
+    const savedGroup = await this.repositories.courseGroups.save(group);
     await this.recordAuditEvent({
       eventType: AuditEventType.PROGRESS_UPDATED,
       actorUserId: actorId,
@@ -2828,10 +2798,10 @@ export class LearningTaskService {
       ['memberships'],
     );
     const [progress, assessments] = await Promise.all([
-      this.getGroupTaskProgressRepository().find({
+      this.getGroupTaskProgressStore().find({
         where: { courseRunId: run.id, groupId: group.id },
       }),
-      this.taskAssessmentRepository.find({
+      this.repositories.taskAssessments.find({
         where: {
           courseRunId: run.id,
           assessmentTargetType: TaskAssessmentTargetType.GROUP,
@@ -2846,7 +2816,7 @@ export class LearningTaskService {
       );
     }
 
-    await this.courseGroupRepository.delete(group.id);
+    await this.repositories.courseGroups.delete(group.id);
     await this.recordAuditEvent({
       eventType: AuditEventType.PROGRESS_UPDATED,
       actorUserId: actorId,
@@ -2898,7 +2868,7 @@ export class LearningTaskService {
       membership.joined_at = new Date();
       membership.left_at = null;
       membership.added_by = actorId;
-      const savedMembership = await this.groupMembershipRepository.save(membership);
+      const savedMembership = await this.repositories.groupMemberships.save(membership);
       group.memberships = [...(group.memberships ?? []), savedMembership];
     }
 
@@ -2938,7 +2908,7 @@ export class LearningTaskService {
       groupId,
       ['memberships'],
     );
-    await this.groupMembershipRepository.delete({
+    await this.repositories.groupMemberships.delete({
       group_id: group.id,
       user_id: this.toUserId(studentId),
     });
@@ -3006,7 +2976,7 @@ export class LearningTaskService {
       groupProgress.status = TaskProgressStatus.IN_PROGRESS;
       groupProgress.startedAt = groupProgress.startedAt ?? new Date();
       groupProgress.updatedBy = actorId;
-      const savedProgress = await this.getGroupTaskProgressRepository().save(groupProgress);
+      const savedProgress = await this.getGroupTaskProgressStore().save(groupProgress);
       await this.applyGroupProgressToMembers(task, group, savedProgress, null, actorId);
       await this.recordAuditEvent({
         eventType: AuditEventType.TASK_STARTED,
@@ -3103,7 +3073,7 @@ export class LearningTaskService {
     groupProgress.completedAt = null;
     groupProgress.progressData = submissionData;
     groupProgress.updatedBy = actorId;
-    const savedProgress = await this.getGroupTaskProgressRepository().save(groupProgress);
+    const savedProgress = await this.getGroupTaskProgressStore().save(groupProgress);
     await this.applyGroupProgressToMembers(task, group, savedProgress, assessment, actorId);
     await this.recordAuditEvent({
       eventType: AuditEventType.ASSESSMENT_SUBMITTED,
@@ -3202,7 +3172,7 @@ export class LearningTaskService {
     groupProgress.startedAt = groupProgress.startedAt ?? new Date();
     groupProgress.completedAt = new Date();
     groupProgress.updatedBy = actorId;
-    const savedProgress = await this.getGroupTaskProgressRepository().save(groupProgress);
+    const savedProgress = await this.getGroupTaskProgressStore().save(groupProgress);
     await this.applyGroupProgressToMembers(task, group, savedProgress, assessment, actorId);
     await this.recordAuditEvent({
       eventType: AuditEventType.ASSESSMENT_MANUALLY_GRADED,

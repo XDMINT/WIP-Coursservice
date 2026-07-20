@@ -1,4 +1,4 @@
-import { Not, In } from 'typeorm';
+import { CourseDomainService } from './course-domain.service';
 import { CoursePermission, hasCoursePermission } from '../courses.permissions';
 import { ApiForbiddenError, ApiNotFoundError, ApiValidationError } from '../common/api-errors';
 import {
@@ -18,7 +18,6 @@ import {
   LearningMaterialType,
 } from '../entities/learning-material.entity';
 
-type CourseServiceFacade = any;
 
 type UploadedLearningMaterialFile = {
   originalname?: string;
@@ -66,37 +65,7 @@ const ALLOWED_MATERIAL_MIME_TYPES = [
   'video/webm',
 ];
 
-export class LearningMaterialService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class LearningMaterialService extends CourseDomainService {
 
   private normalizeMaterialType(type: unknown): LearningMaterialType {
     const normalizedType = String(type ?? '').toUpperCase();
@@ -349,7 +318,7 @@ export class LearningMaterialService {
       throw new ApiValidationError('Task-based materials require a release task');
     }
 
-    const releaseTask = await this.taskRepository.findOne({
+    const releaseTask = await this.repositories.tasks.findOne({
       where: {
         id: releaseAfterTaskId,
         courseId: material.courseId,
@@ -376,7 +345,7 @@ export class LearningMaterialService {
   ): Promise<LearningMaterialVisibility> {
     const releaseMode = material.releaseMode ?? LearningMaterialReleaseMode.IMMEDIATE;
     const releaseTask = material.releaseAfterTaskId
-      ? await this.taskRepository.findOne({
+      ? await this.repositories.tasks.findOne({
         where: {
           id: material.releaseAfterTaskId,
         },
@@ -453,7 +422,7 @@ export class LearningMaterialService {
     }
 
     const progress = releaseTask
-      ? await this.taskProgressRepository.findOne({
+      ? await this.repositories.taskProgress.findOne({
         where: {
           enrollmentId: enrollment.id,
           taskId: releaseTask.id,
@@ -502,7 +471,7 @@ export class LearningMaterialService {
   private async findLearningMaterialOrThrow(
     materialId: string,
   ): Promise<LearningMaterial> {
-    const material = await this.learningMaterialRepository.findOne({
+    const material = await this.repositories.learningMaterials.findOne({
       where: { id: materialId },
     });
 
@@ -611,7 +580,7 @@ export class LearningMaterialService {
     course.id = courseId;
     material.course = course;
 
-    const savedMaterial = await this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_CREATED,
@@ -687,7 +656,7 @@ export class LearningMaterialService {
       true,
     );
 
-    const savedMaterial = await this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_CREATED,
@@ -750,7 +719,7 @@ export class LearningMaterialService {
       true,
     );
 
-    const savedMaterial = await this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_CREATED,
@@ -786,13 +755,13 @@ export class LearningMaterialService {
     const canManage = hasCoursePermission(role, CoursePermission.ManageCourseContent);
     const { run: currentRun, version } =
       await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
-    const materials = await this.learningMaterialRepository.find({
+    const materials = await this.repositories.learningMaterials.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: currentRun.id,
         courseVersionId: version.id,
         publicationStatus: canManage
-          ? Not(LearningMaterialPublicationStatus.ARCHIVED)
+          ? this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED)
           : LearningMaterialPublicationStatus.PUBLISHED,
       },
       order: {
@@ -818,12 +787,12 @@ export class LearningMaterialService {
       this.toCourseId(courseId),
       run.id,
     );
-    const materials = await this.learningMaterialRepository.find({
+    const materials = await this.repositories.learningMaterials.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: run.id,
         courseVersionId: version.id,
-        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
       },
       order: {
         sortOrder: 'ASC',
@@ -854,12 +823,12 @@ export class LearningMaterialService {
       run.id,
       versionId,
     );
-    const materials = await this.learningMaterialRepository.find({
+    const materials = await this.repositories.learningMaterials.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: run.id,
         courseVersionId: version.id,
-        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
       },
       order: {
         sortOrder: 'ASC',
@@ -954,7 +923,7 @@ export class LearningMaterialService {
 
     material.updatedBy = actorId;
 
-    const savedMaterial = await this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_UPDATED,
@@ -1000,13 +969,13 @@ export class LearningMaterialService {
 
     const { run: currentRun, version } =
       await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
-    const materials = await this.learningMaterialRepository.find({
+    const materials = await this.repositories.learningMaterials.find({
       where: {
-        id: In(materialIds),
+        id: this.repositories.in(materialIds),
         courseId: this.toCourseId(courseId),
         courseRunId: currentRun.id,
         courseVersionId: version.id,
-        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
       },
     });
     const materialById = new Map<string, LearningMaterial>(
@@ -1024,7 +993,7 @@ export class LearningMaterialService {
       material.updatedBy = actorId;
     }
 
-    const savedMaterials = (await this.learningMaterialRepository.save(materials))
+    const savedMaterials = (await this.repositories.learningMaterials.save(materials))
       .sort((left, right) => left.sortOrder - right.sortOrder);
     await this.refreshCourseVersionContent(version.id);
     await this.recordAuditEvent({
@@ -1066,7 +1035,7 @@ export class LearningMaterialService {
     material.archivedAt = new Date();
     material.updatedBy = actorId;
 
-    await this.learningMaterialRepository.save(material);
+    await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(material.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_DELETED,
@@ -1097,7 +1066,7 @@ export class LearningMaterialService {
     material.publishedAt = new Date();
     material.updatedBy = actorId;
 
-    const savedMaterial = await this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_UPDATED,
@@ -1133,7 +1102,7 @@ export class LearningMaterialService {
     material.publicationStatus = LearningMaterialPublicationStatus.DRAFT;
     material.updatedBy = actorId;
 
-    const savedMaterial = await this.learningMaterialRepository.save(material);
+    const savedMaterial = await this.repositories.learningMaterials.save(material);
     await this.refreshCourseVersionContent(savedMaterial.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.MATERIAL_UPDATED,

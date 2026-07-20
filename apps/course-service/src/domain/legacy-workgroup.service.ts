@@ -1,40 +1,10 @@
 import { CourseGroup } from '../entities/course-group.entity';
+import { CourseDomainService } from './course-domain.service';
 import { CourseMemberRole } from '../entities/enrollment.entity';
 import { GroupMembership } from '../entities/group-membership.entity';
 
-type CourseServiceFacade = any;
 
-export class LegacyWorkgroupService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class LegacyWorkgroupService extends CourseDomainService {
 
   async createCourseGroup(
     courseId: string,
@@ -51,18 +21,18 @@ export class LegacyWorkgroupService {
     group.created_by = createdBy;
     group.updated_by = createdBy;
 
-    return this.courseGroupRepository.save(group);
+    return this.repositories.courseGroups.save(group);
   }
 
   async getCourseGroupsByCourse(courseId: string): Promise<CourseGroup[]> {
-    return this.courseGroupRepository.find({
+    return this.repositories.courseGroups.find({
       where: { course_id: courseId },
       relations: ['memberships'],
     });
   }
 
   async getCourseGroupById(id: string): Promise<CourseGroup> {
-    return this.courseGroupRepository.findOne({
+    return this.repositories.courseGroups.findOne({
       where: { id },
       relations: ['memberships'],
     });
@@ -78,7 +48,7 @@ export class LegacyWorkgroupService {
     groupFeedback: string,
     updatedBy: string,
   ): Promise<CourseGroup> {
-    const group = await this.courseGroupRepository.findOne({
+    const group = await this.repositories.courseGroups.findOne({
       where: { id },
     });
 
@@ -94,11 +64,11 @@ export class LegacyWorkgroupService {
     group.group_feedback = groupFeedback;
     group.updated_by = updatedBy;
 
-    return this.courseGroupRepository.save(group);
+    return this.repositories.courseGroups.save(group);
   }
 
   async deleteCourseGroup(id: string): Promise<void> {
-    await this.courseGroupRepository.delete(id);
+    await this.repositories.courseGroups.delete(id);
   }
 
   async addMemberToGroup(
@@ -114,11 +84,11 @@ export class LegacyWorkgroupService {
     membership.joined_at = new Date();
     membership.added_by = addedBy;
 
-    return this.groupMembershipRepository.save(membership);
+    return this.repositories.groupMemberships.save(membership);
   }
 
   async removeMemberFromGroup(groupId: string, userId: string): Promise<void> {
-    await this.groupMembershipRepository.delete({
+    await this.repositories.groupMemberships.delete({
       group_id: groupId,
       user_id: userId,
     });
@@ -129,7 +99,7 @@ export class LegacyWorkgroupService {
     userId: string,
     role: string,
   ): Promise<GroupMembership> {
-    const membership = await this.groupMembershipRepository.findOne({
+    const membership = await this.repositories.groupMemberships.findOne({
       where: { group_id: groupId, user_id: userId },
     });
 
@@ -139,17 +109,17 @@ export class LegacyWorkgroupService {
 
     membership.role = role as any;
 
-    return this.groupMembershipRepository.save(membership);
+    return this.repositories.groupMemberships.save(membership);
   }
 
   async getGroupMembers(groupId: string): Promise<GroupMembership[]> {
-    return this.groupMembershipRepository.find({
+    return this.repositories.groupMemberships.find({
       where: { group_id: groupId },
     });
   }
 
   async getGroupsForUser(courseId: string, userId: string): Promise<CourseGroup[]> {
-    const memberships = await this.groupMembershipRepository.find({
+    const memberships = await this.repositories.groupMemberships.find({
       where: { user_id: userId },
       relations: ['group'],
     });
@@ -163,7 +133,7 @@ export class LegacyWorkgroupService {
     groupId: string,
     userId: string,
   ): Promise<GroupMembership> {
-    return this.groupMembershipRepository.findOne({
+    return this.repositories.groupMemberships.findOne({
       where: { group_id: groupId, user_id: userId },
     });
   }
@@ -174,7 +144,7 @@ export class LegacyWorkgroupService {
     feedback: string,
     updatedBy: string,
   ): Promise<CourseGroup> {
-    const group = await this.courseGroupRepository.findOne({
+    const group = await this.repositories.courseGroups.findOne({
       where: { id: groupId },
     });
 
@@ -186,7 +156,7 @@ export class LegacyWorkgroupService {
     group.group_feedback = feedback;
     group.updated_by = updatedBy;
 
-    return this.courseGroupRepository.save(group);
+    return this.repositories.courseGroups.save(group);
   }
 
   async assignIndividualGrade(
@@ -195,7 +165,7 @@ export class LegacyWorkgroupService {
     grade: number,
     feedback: string,
   ): Promise<GroupMembership> {
-    const membership = await this.groupMembershipRepository.findOne({
+    const membership = await this.repositories.groupMemberships.findOne({
       where: { group_id: groupId, user_id: userId },
     });
 
@@ -206,11 +176,11 @@ export class LegacyWorkgroupService {
     membership.individual_grade = grade;
     membership.individual_feedback = feedback;
 
-    return this.groupMembershipRepository.save(membership);
+    return this.repositories.groupMemberships.save(membership);
   }
 
   async getGroupPerformance(groupId: string): Promise<any> {
-    const group = await this.courseGroupRepository.findOne({
+    const group = await this.repositories.courseGroups.findOne({
       where: { id: groupId },
       relations: ['memberships'],
     });
@@ -255,7 +225,7 @@ export class LegacyWorkgroupService {
     createdBy: string,
   ): Promise<CourseGroup[]> {
     // Get all enrollments for the course
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: { courseId: courseId },
     });
 
@@ -308,7 +278,7 @@ export class LegacyWorkgroupService {
     groupId: string,
     courseId: string,
   ): Promise<any> {
-    const group = await this.courseGroupRepository.findOne({
+    const group = await this.repositories.courseGroups.findOne({
       where: { id: groupId },
       relations: ['memberships'],
     });

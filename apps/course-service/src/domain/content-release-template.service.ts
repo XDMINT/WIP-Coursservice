@@ -1,46 +1,13 @@
-import { LessThanOrEqual } from 'typeorm';
+import { CourseDomainService } from './course-domain.service';
 import { ApiNotFoundError, ApiValidationError } from '../common/api-errors';
 import { CoursePermission } from '../courses.permissions';
-import { Assignment } from '../entities/assignment.entity';
 import { ContentRelease, ReleaseType } from '../entities/content-release.entity';
 import { ContentTemplate } from '../entities/content-template.entity';
 import { Course } from '../entities/course.entity';
-import { LearningMaterial } from '../entities/learning-material.entity';
-import { Task, TaskUnlockMode } from '../entities/task.entity';
+import { TaskUnlockMode } from '../entities/task.entity';
 
-type CourseServiceFacade = any;
 
-export class ContentReleaseTemplateService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class ContentReleaseTemplateService extends CourseDomainService {
 
   private async assertCourseReadable(
     courseId: string,
@@ -75,7 +42,7 @@ export class ContentReleaseTemplateService {
   }
 
   private async findReleaseWithCourseOrThrow(id: string): Promise<ContentRelease> {
-    const release = await this.contentReleaseRepository.findOne({
+    const release = await this.repositories.contentReleases.findOne({
       where: { id },
       relations: ['course'],
     });
@@ -88,7 +55,7 @@ export class ContentReleaseTemplateService {
   }
 
   private async findTemplateWithCourseOrThrow(id: string): Promise<ContentTemplate> {
-    const template = await this.contentTemplateRepository.findOne({
+    const template = await this.repositories.contentTemplates.findOne({
       where: { id },
       relations: ['course'],
     });
@@ -144,7 +111,7 @@ export class ContentReleaseTemplateService {
       return;
     }
 
-    const enrollment = await this.enrollmentRepository.findOne({
+    const enrollment = await this.repositories.enrollments.findOne({
       where: { id: enrollmentId },
     });
 
@@ -190,7 +157,7 @@ export class ContentReleaseTemplateService {
     course.id = courseId;
     release.course = course;
 
-    return this.contentReleaseRepository.save(release);
+    return this.repositories.contentReleases.save(release);
   }
 
   async getContentReleasesByCourse(
@@ -199,7 +166,7 @@ export class ContentReleaseTemplateService {
   ): Promise<ContentRelease[]> {
     await this.assertCourseReadable(courseId, actorUserId);
 
-    return this.contentReleaseRepository.find({
+    return this.repositories.contentReleases.find({
       where: { course: { id: courseId } },
       order: { releaseDate: 'ASC' },
     });
@@ -237,7 +204,7 @@ export class ContentReleaseTemplateService {
     release.isActive = isActive;
     release.updatedBy = actorId ?? updatedBy;
 
-    return this.contentReleaseRepository.save(release);
+    return this.repositories.contentReleases.save(release);
   }
 
   async deleteContentRelease(
@@ -247,7 +214,7 @@ export class ContentReleaseTemplateService {
     const release = await this.findReleaseWithCourseOrThrow(id);
     await this.assertCourseManageable(release.course.id, actorUserId);
 
-    await this.contentReleaseRepository.delete(id);
+    await this.repositories.contentReleases.delete(id);
   }
 
   async releaseContentManually(
@@ -266,7 +233,7 @@ export class ContentReleaseTemplateService {
     release.releasedAt = new Date();
     release.releasedBy = actorId ?? releasedBy;
 
-    return this.contentReleaseRepository.save(release);
+    return this.repositories.contentReleases.save(release);
   }
 
   async checkAutomaticReleases(
@@ -276,13 +243,13 @@ export class ContentReleaseTemplateService {
     await this.assertCourseReadable(courseId, actorUserId);
 
     const now = new Date();
-    const releases = await this.contentReleaseRepository.find({
+    const releases = await this.repositories.contentReleases.find({
       where: {
         course: { id: courseId },
         releaseType: ReleaseType.TIME_BASED,
         isReleased: false,
         isActive: true,
-        releaseDate: LessThanOrEqual(now),
+        releaseDate: this.repositories.lessThanOrEqual(now),
       },
     });
 
@@ -292,7 +259,7 @@ export class ContentReleaseTemplateService {
       release.isReleased = true;
       release.releasedAt = now;
       release.releasedBy = 'system';
-      const updatedRelease = await this.contentReleaseRepository.save(release);
+      const updatedRelease = await this.repositories.contentReleases.save(release);
       releasedContent.push(updatedRelease);
     }
 
@@ -306,7 +273,7 @@ export class ContentReleaseTemplateService {
   ): Promise<ContentRelease[]> {
     await this.assertEnrollmentContentReadable(courseId, enrollmentId, actorUserId);
 
-    const releases = await this.contentReleaseRepository.find({
+    const releases = await this.repositories.contentReleases.find({
       where: {
         course: { id: courseId },
         releaseType: ReleaseType.PROGRESS_BASED,
@@ -339,7 +306,7 @@ export class ContentReleaseTemplateService {
 
       if (conditions.requiredTaskIds) {
         for (const requiredTaskId of conditions.requiredTaskIds) {
-          const taskProgress = await this.taskProgressRepository.findOne({
+          const taskProgress = await this.repositories.taskProgress.findOne({
             where: {
               task: { id: requiredTaskId },
               enrollment: { id: enrollmentId },
@@ -357,7 +324,7 @@ export class ContentReleaseTemplateService {
         release.isReleased = true;
         release.releasedAt = new Date();
         release.releasedBy = 'system';
-        const updatedRelease = await this.contentReleaseRepository.save(
+        const updatedRelease = await this.repositories.contentReleases.save(
           release,
         );
         releasedContent.push(updatedRelease);
@@ -379,7 +346,7 @@ export class ContentReleaseTemplateService {
     await this.checkProgressBasedReleases(courseId, enrollmentId);
 
     // Get all released content for the course
-    const releases = await this.contentReleaseRepository.find({
+    const releases = await this.repositories.contentReleases.find({
       where: {
         course: { id: courseId },
         isReleased: true,
@@ -395,17 +362,17 @@ export class ContentReleaseTemplateService {
 
       switch (release.contentType) {
         case 'LEARNING_MATERIAL':
-          contentDetails = await this.learningMaterialRepository.findOne({
+          contentDetails = await this.repositories.learningMaterials.findOne({
             where: { id: release.contentId },
           });
           break;
         case 'ASSIGNMENT':
-          contentDetails = await this.assignmentRepository.findOne({
+          contentDetails = await this.repositories.assignments.findOne({
             where: { id: release.contentId },
           });
           break;
         case 'TASK':
-          contentDetails = await this.taskRepository.findOne({
+          contentDetails = await this.repositories.tasks.findOne({
             where: { id: release.contentId },
           });
           break;
@@ -434,11 +401,6 @@ export class ContentReleaseTemplateService {
   ): Promise<any> {
     await this.assertEnrollmentContentReadable(courseId, enrollmentId, actorUserId);
 
-    // Get all content releases for the course
-    const allReleases = await this.contentReleaseRepository.find({
-      where: { course: { id: courseId }, isActive: true },
-    });
-
     // Check automatic releases
     const autoReleased = await this.checkAutomaticReleases(courseId);
     
@@ -449,7 +411,7 @@ export class ContentReleaseTemplateService {
     );
 
     // Get final status
-    const finalReleases = await this.contentReleaseRepository.find({
+    const finalReleases = await this.repositories.contentReleases.find({
       where: { course: { id: courseId }, isActive: true },
     });
 
@@ -503,7 +465,7 @@ export class ContentReleaseTemplateService {
     course.id = courseId;
     template.course = course;
 
-    return this.contentTemplateRepository.save(template);
+    return this.repositories.contentTemplates.save(template);
   }
 
   async getContentTemplatesByCourse(
@@ -512,7 +474,7 @@ export class ContentReleaseTemplateService {
   ): Promise<ContentTemplate[]> {
     await this.assertCourseReadable(courseId, actorUserId);
 
-    return this.contentTemplateRepository.find({
+    return this.repositories.contentTemplates.find({
       where: { course: { id: courseId } },
       order: { name: 'ASC' },
     });
@@ -525,7 +487,7 @@ export class ContentReleaseTemplateService {
       this.requireActorUserId(actorUserId);
     }
 
-    return this.contentTemplateRepository.find({
+    return this.repositories.contentTemplates.find({
       where: { isGlobal: true },
       order: { name: 'ASC' },
     });
@@ -565,7 +527,7 @@ export class ContentReleaseTemplateService {
     template.isGlobal = isGlobal;
     template.updatedBy = actorId ?? updatedBy;
 
-    return this.contentTemplateRepository.save(template);
+    return this.repositories.contentTemplates.save(template);
   }
 
   async deleteContentTemplate(
@@ -575,7 +537,7 @@ export class ContentReleaseTemplateService {
     const template = await this.findTemplateWithCourseOrThrow(id);
     await this.assertTemplateManageable(template, actorUserId);
 
-    await this.contentTemplateRepository.delete(id);
+    await this.repositories.contentTemplates.delete(id);
   }
 
   async applyTemplateToCourse(
@@ -586,7 +548,7 @@ export class ContentReleaseTemplateService {
   ): Promise<any> {
     const actorId = await this.assertCourseManageable(courseId, actorUserId);
     const applierId = actorId ?? appliedBy;
-    const template = await this.contentTemplateRepository.findOne({
+    const template = await this.repositories.contentTemplates.findOne({
       where: { id: templateId },
       relations: ['course'],
     });

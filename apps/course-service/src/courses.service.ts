@@ -1,150 +1,30 @@
 /**
- * Courses Service - Business logic layer for course management
+ * Courses Service - API facade for course management
  * 
- * This service provides all the business logic for managing courses, learning materials,
- * assignments, grades, tasks, content releases, templates, groups, and calendar events.
- * It acts as the bridge between the controllers and the database repositories.
+ * This service keeps the public controller-facing API stable and delegates course catalog,
+ * run/version, material, task, assessment, result, workgroup, search, and calendar behavior
+ * to focused domain services through a shared domain context.
  * 
  * @module CoursesService
  */
 import { Injectable, Optional } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual, ILike, MoreThanOrEqual, Not, IsNull, In } from 'typeorm';
-import { randomUUID } from 'crypto';
-import {
-  LearningMaterial,
-  LearningMaterialPublicationStatus,
-  LearningMaterialReleaseMode,
-  LearningMaterialType,
-} from './entities/learning-material.entity';
-import { Assignment } from './entities/assignment.entity';
-import { Grade } from './entities/grade.entity';
-import {
-  CoursePassStatus,
-  CourseResult,
-} from './entities/course-result.entity';
-import { Enrollment, CourseMemberRole } from './entities/enrollment.entity';
-import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from './entities/task.entity';
-import {
-  TaskAssessment,
-  TaskAssessmentStatus,
-  TaskAssessmentTargetType,
-} from './entities/task-assessment.entity';
-import {
-  TaskProgress,
-  TaskProgressStatus,
-  TaskUnlockSource,
-} from './entities/task-progress.entity';
-import { ContentRelease, ReleaseType } from './entities/content-release.entity';
-import { ContentTemplate } from './entities/content-template.entity';
-import { Course, CourseRunTemplateStrategy, CourseStatus } from './entities/course.entity';
-import {
-  CourseRecurrenceType,
-  CourseRun,
-  CourseRunStatus,
-} from './entities/course-run.entity';
-import { CourseVersion, CourseVersionStatus } from './entities/course-version.entity';
-import { CourseGroup } from './entities/course-group.entity';
-import { GroupMembership, MembershipRole } from './entities/group-membership.entity';
-import { GroupTaskProgress } from './entities/group-task-progress.entity';
-import { CalendarEvent } from './entities/calendar-event.entity';
-import {
-  ApiForbiddenError,
-  ApiNotFoundError,
-  ApiUnauthorizedError,
-  ApiValidationError,
-} from './common/api-errors';
-import {
-  CourseContextResponseDto,
-  CourseCatalogItemResponseDto,
-  CourseResponseDto,
-  CourseRunDeletionResponseDto,
-  CourseRunPlanResponseDto,
-  CourseRunResponseDto,
-  CourseVersionResponseDto,
-  CreateCourseRunDto,
-  CreateCourseVersionDto,
-  EnrollmentResponseDto,
-  UpdateCourseRunPlanTemplateDto,
-  mapCourseContextToDto,
-  mapCourseToCatalogItemDto,
-  mapCourseToDto,
-  mapCourseRunToDto,
-  mapCourseVersionToDto,
-  mapEnrollmentToDto,
-} from './dto/course.dto';
 import {
   CourseResultListQueryDto,
   CourseResultListResponseDto,
   CourseResultResponseDto,
   ManualCourseResultDto,
 } from './dto/course-result.dto';
-import {
-  CoursePermission,
-  hasCoursePermission,
-  normalizeCourseRole,
-} from './courses.permissions';
-import {
-  CreateExternalLearningMaterialDto,
-  LearningMaterialResponseDto,
-  UpdateLearningMaterialDto,
-  UpdateLearningMaterialSortDto,
-  mapLearningMaterialToDto,
-} from './dto/learning-material.dto';
-import {
-  CreateLearningTaskDto,
-  LearningPathResponseDto,
-  LearningTaskProgressDto,
-  LearningTaskResponseDto,
-  ManualUnlockLearningTaskDto,
-  ManualTaskAssessmentDto,
-  MockEvaluateLearningTaskDto,
-  StudentLearningTaskResponseDto,
-  StudentProgressOverviewDto,
-  SubmitLearningTaskDto,
-  TaskAssessmentResponseDto,
-  UpdateLearningTaskDto,
-  UpdateLearningTaskReleaseConfigDto,
-  UpdateLearningTaskSortDto,
-  mapLearningTaskToDto,
-  mapLearningTaskWithProgressToDto,
-  mapTaskAssessmentToDto,
-  mapTaskProgressToDto,
-} from './dto/learning-process.dto';
-import {
-  AddStudyGroupMemberDto,
-  CreateStudyGroupDto,
-  ManualGroupTaskAssessmentDto,
-  StudyGroupResponseDto,
-  UpdateStudyGroupDto,
-  mapGroupTaskProgressToDto,
-  mapStudyGroupToDto,
-} from './dto/study-group.dto';
-import { calculateCoursePassStatus } from './course-result.rules';
 import { LocalMaterialStorage } from './storage/material-storage';
-import {
-  TASK_PASS_THRESHOLD_PERCENT,
-  calculateTaskAssessmentPassed,
-} from './task-assessment.rules';
-import { TaskServiceClient, TaskServiceTask } from './task-service.client';
-import { CourseResultService } from './domain/course-result.service';
-import { AssessmentService } from './domain/assessment.service';
-import { LearningTaskService } from './domain/learning-task.service';
-import { LearningMaterialService } from './domain/learning-material.service';
-import { CourseRunVersionService } from './domain/course-run-version.service';
-import { AssignmentGradeService } from './domain/assignment-grade.service';
-import { CalendarEventService } from './domain/calendar-event.service';
-import { ContentReleaseTemplateService } from './domain/content-release-template.service';
-import { CourseCatalogService } from './domain/course-catalog.service';
-import { CourseSearchService } from './domain/course-search.service';
-import { LegacyWorkgroupService } from './domain/legacy-workgroup.service';
+import { TaskEvaluationClient } from './task-evaluation.client';
+import { TaskServiceClient } from './task-service.client';
 import { AuditLogService } from './audit-log.service';
 import {
-  AuditEventListQueryDto,
-  AuditEventResponseDto,
-  mapAuditEventToDto,
-} from './dto/audit-event.dto';
-import { AuditEventType } from './entities/audit-event.entity';
+  CourseDomainContext,
+  CourseDomainFacade,
+  createCourseDomainFacade,
+} from './domain/course-domain.context';
+import { CourseDomainServices } from './domain/course-domain.composition';
+import { CourseRepositories } from './persistence/course-repositories';
 
 export type UploadedLearningMaterialFile = {
   originalname?: string;
@@ -153,91 +33,40 @@ export type UploadedLearningMaterialFile = {
   buffer?: Buffer;
 };
 
-type LearningMaterialVisibility = {
-  visible: boolean;
-  locked: boolean;
-  lockedReason?: string;
-  releaseAfterTaskTitle?: string;
-  visibleForStudents: boolean;
-};
-
 /**
  * Courses Service Class
  * 
- * Main service class providing business logic for course management functionality
+ * Main facade class for course management functionality
  */
 @Injectable()
 export class CoursesService {
-  /**
-   * Constructor with dependency injection
-   *
-   * @param {Repository<Course>} coursesRepository - Course repository
-   * @param {Repository<LearningMaterial>} learningMaterialRepository - Learning material repository
-   * @param {Repository<Assignment>} assignmentRepository - Assignment repository
-   * @param {Repository<Grade>} gradeRepository - Grade repository
-   * @param {Repository<Enrollment>} enrollmentRepository - Enrollment repository
-   * @param {Repository<Task>} taskRepository - Task repository
-   * @param {Repository<TaskProgress>} taskProgressRepository - Task progress repository
-   * @param {Repository<ContentRelease>} contentReleaseRepository - Content release repository
-   * @param {Repository<ContentTemplate>} contentTemplateRepository - Content template repository
-   * @param {Repository<CourseGroup>} courseGroupRepository - Course group repository
-   * @param {Repository<GroupMembership>} groupMembershipRepository - Group membership repository
-   * @param {Repository<CalendarEvent>} calendarEventRepository - Calendar event repository
-   */
   constructor(
-    @InjectRepository(Course)
-    private coursesRepository: Repository<Course>,
-    @InjectRepository(CourseRun)
-    private courseRunRepository: Repository<CourseRun>,
-    @InjectRepository(CourseVersion)
-    private courseVersionRepository: Repository<CourseVersion>,
-    @InjectRepository(LearningMaterial)
-    private learningMaterialRepository: Repository<LearningMaterial>,
-    @InjectRepository(Assignment)
-    private assignmentRepository: Repository<Assignment>,
-    @InjectRepository(Grade)
-    private gradeRepository: Repository<Grade>,
-    @InjectRepository(CourseResult)
-    private courseResultRepository: Repository<CourseResult>,
-    @InjectRepository(Enrollment)
-    private enrollmentRepository: Repository<Enrollment>,
-    @InjectRepository(Task)
-    private taskRepository: Repository<Task>,
-    @InjectRepository(TaskAssessment)
-    private taskAssessmentRepository: Repository<TaskAssessment>,
-    @InjectRepository(TaskProgress)
-    private taskProgressRepository: Repository<TaskProgress>,
-    @InjectRepository(ContentRelease)
-    private contentReleaseRepository: Repository<ContentRelease>,
-    @InjectRepository(ContentTemplate)
-    private contentTemplateRepository: Repository<ContentTemplate>,
-    @InjectRepository(CourseGroup)
-    private courseGroupRepository: Repository<CourseGroup>,
-    @InjectRepository(GroupMembership)
-    private groupMembershipRepository: Repository<GroupMembership>,
-    @InjectRepository(CalendarEvent)
-    private calendarEventRepository: Repository<CalendarEvent>,
-    private readonly materialStorage: LocalMaterialStorage,
+    repositories: CourseRepositories,
+    materialStorage: LocalMaterialStorage,
     @Optional()
-    private readonly auditLogService?: AuditLogService,
+    auditLogService?: AuditLogService,
     @Optional()
-    @InjectRepository(GroupTaskProgress)
-    private readonly groupTaskProgressRepository?: Repository<GroupTaskProgress>,
+    taskServiceClient?: TaskServiceClient,
     @Optional()
-    private readonly taskServiceClient?: TaskServiceClient,
-  ) {}
+    taskEvaluationClient?: TaskEvaluationClient,
+  ) {
+    this.domainContext = new CourseDomainContext({
+      repositories,
+      materialStorage,
+      auditLogService,
+      taskServiceClient,
+      taskEvaluationClient,
+    });
+    this.domainFacade = createCourseDomainFacade(this.domainContext);
+    this.domainServices = CourseDomainServices.create(
+      this.domainContext,
+      this.domainFacade,
+    );
+  }
 
-  private readonly fallbackTaskServiceClient = new TaskServiceClient();
-  private readonly courseResultService = new CourseResultService(this as any);
-  private readonly assessmentService = new AssessmentService(this as any);
-  private readonly learningMaterialService = new LearningMaterialService(this as any).api;
-  private readonly courseRunVersionService = new CourseRunVersionService(this as any).api;
-  private readonly courseCatalogService = new CourseCatalogService(this as any).api;
-  private readonly assignmentGradeService = new AssignmentGradeService(this as any).api;
-  private readonly contentReleaseTemplateService = new ContentReleaseTemplateService(this as any).api;
-  private readonly courseSearchService = new CourseSearchService(this as any).api;
-  private readonly legacyWorkgroupService = new LegacyWorkgroupService(this as any).api;
-  private readonly calendarEventService = new CalendarEventService(this as any).api;
+  private readonly domainContext: CourseDomainContext;
+  private readonly domainFacade: CourseDomainFacade;
+  private readonly domainServices: CourseDomainServices;
 
   /**
    * Get hello message for testing
@@ -248,734 +77,93 @@ export class CoursesService {
     return 'Hello World!';
   }
 
-  private toCourseId(id: string | number): string {
-    return String(id);
-  }
+  private delegateTo(
+    serviceName: string,
+    service: Record<string, unknown>,
+    methodName: string,
+    args: unknown[],
+  ): any {
+    const method = service[methodName];
 
-  private getTaskServiceClient(): TaskServiceClient {
-    return this.taskServiceClient ?? this.fallbackTaskServiceClient;
-  }
-
-  private applyTaskServiceContent(
-    reference: Task,
-    taskContent?: TaskServiceTask | null,
-  ): Task {
-    reference.title = taskContent?.title ?? reference.title ?? 'Aufgabe';
-    reference.description = taskContent?.description ?? reference.description ?? '';
-    reference.type = taskContent?.type ?? reference.type ?? 'MOCK';
-    reference.content = taskContent?.content ?? reference.content ?? {};
-
-    if (
-      (reference.maxPoints === undefined || reference.maxPoints === null) &&
-      taskContent?.defaultMaxScore !== undefined &&
-      taskContent.defaultMaxScore !== null
-    ) {
-      reference.maxPoints = Number(taskContent.defaultMaxScore);
+    if (typeof method !== 'function') {
+      throw new Error(`${serviceName}.${methodName} is not available`);
     }
 
-    if (
-      (reference.passThreshold === undefined || reference.passThreshold === null) &&
-      taskContent?.defaultPassThreshold !== undefined &&
-      taskContent.defaultPassThreshold !== null
-    ) {
-      reference.passThreshold = Number(taskContent.defaultPassThreshold);
-    }
-
-    return reference;
-  }
-
-  private async enrichTaskReferences<T extends Task>(references: T[]): Promise<T[]> {
-    const taskContents = await this.loadTaskContents(references);
-
-    return references.map((reference) =>
-      this.applyTaskServiceContent(
-        reference,
-        taskContents.get(reference.externalTaskId ?? reference.id),
-      ) as T,
-    );
-  }
-
-  private async enrichTaskReference<T extends Task>(reference: T): Promise<T> {
-    return (await this.enrichTaskReferences([reference]))[0];
-  }
-
-  private buildTaskServicePayload(
-    body: CreateLearningTaskDto | UpdateLearningTaskDto,
-    fallback?: Task,
-  ): Omit<TaskServiceTask, 'id'> {
-    return {
-      title: body.title !== undefined
-        ? this.requireTaskTitle(body.title)
-        : fallback?.title ?? 'Aufgabe',
-      description: body.description !== undefined
-        ? String(body.description ?? '').trim()
-        : fallback?.description ?? '',
-      type: body.type !== undefined
-        ? String(body.type ?? '').trim() || fallback?.type || 'DEMO_TASK'
-        : fallback?.type ?? 'DEMO_TASK',
-      content: body.content !== undefined
-        ? body.content ?? {}
-        : body.completionCriteria !== undefined
-          ? body.completionCriteria ?? {}
-          : fallback?.content ?? fallback?.completionCriteria ?? {},
-      defaultMaxScore: body.maxPoints !== undefined
-        ? this.parseTaskAssessmentNumber(body.maxPoints, 'maxPoints')
-        : fallback?.maxPoints ?? null,
-      defaultPassThreshold: body.passThreshold !== undefined
-        ? this.parseTaskAssessmentNumber(body.passThreshold, 'passThreshold', { max: 100 })
-        : fallback?.passThreshold ?? null,
-      mockEvaluationMode: body.gradingMode !== undefined
-        ? String(body.gradingMode)
-        : fallback?.gradingMode ?? TaskGradingMode.NOT_GRADED,
-    };
-  }
-
-  private localTaskContent(
-    payload: Partial<TaskServiceTask> & { id?: string },
-    fallback?: Task,
-  ): TaskServiceTask {
-    const id = payload.id ?? fallback?.externalTaskId ?? fallback?.id ?? randomUUID();
-
-    return {
-      id,
-      title: payload.title ?? fallback?.title ?? 'Aufgabe',
-      description: payload.description ?? fallback?.description ?? '',
-      type: payload.type ?? fallback?.type ?? 'DEMO_TASK',
-      content: payload.content ?? fallback?.content ?? fallback?.completionCriteria ?? {},
-      defaultMaxScore: payload.defaultMaxScore ?? fallback?.maxPoints ?? null,
-      defaultPassThreshold: payload.defaultPassThreshold ?? fallback?.passThreshold ?? null,
-      mockEvaluationMode: payload.mockEvaluationMode ?? fallback?.gradingMode ?? null,
-      createdAt: payload.createdAt,
-      updatedAt: payload.updatedAt,
-    };
-  }
-
-  private async loadTaskContents<T extends Task>(
-    references: T[],
-  ): Promise<Map<string, TaskServiceTask>> {
-    const client = this.taskServiceClient as any;
-
-    if (client && typeof client.getTasks === 'function') {
-      return client.getTasks(
-        references.map((reference) => reference.externalTaskId ?? reference.id),
-      );
-    }
-
-    return new Map(references.map((reference) => {
-      const id = reference.externalTaskId ?? reference.id;
-      const content = this.localTaskContent({
-        id,
-        title: reference.title,
-        description: reference.description,
-        type: reference.type,
-        content: reference.content ?? reference.completionCriteria ?? {},
-        defaultMaxScore: reference.maxPoints ?? null,
-        defaultPassThreshold: reference.passThreshold ?? null,
-        mockEvaluationMode: reference.gradingMode ?? null,
-      }, reference);
-
-      return [id, content];
-    }));
-  }
-
-  private async createTaskContent(
-    payload: TaskServiceTask & { id: string },
-  ): Promise<TaskServiceTask> {
-    const client = this.taskServiceClient as any;
-
-    if (client && typeof client.createTask === 'function') {
-      return client.createTask(payload);
-    }
-
-    return this.localTaskContent(payload);
-  }
-
-  private async updateTaskContent(
-    taskId: string,
-    payload: Omit<TaskServiceTask, 'id'>,
-    fallback: Task,
-  ): Promise<TaskServiceTask> {
-    const client = this.taskServiceClient as any;
-
-    if (client && typeof client.updateTask === 'function') {
-      return client.updateTask(taskId, payload);
-    }
-
-    return this.localTaskContent({ ...payload, id: taskId }, fallback);
-  }
-
-  private async deleteTaskContent(taskId: string): Promise<void> {
-    const client = this.taskServiceClient as any;
-
-    if (client && typeof client.deleteTask === 'function') {
-      await client.deleteTask(taskId);
-    }
-  }
-
-  private toUserId(userId: string | number): string {
-    return String(userId);
-  }
-
-  private parseAuditLimit(value: unknown): number {
-    const numericLimit = Number(value ?? 100);
-
-    if (!Number.isFinite(numericLimit)) {
-      return 100;
-    }
-
-    return Math.min(Math.max(Math.floor(numericLimit), 1), 100);
-  }
-
-  private parseAuditDate(value: unknown, fieldName: string): Date | undefined {
-    if (value === undefined || value === null || value === '') {
-      return undefined;
-    }
-
-    const date = new Date(String(value));
-
-    if (Number.isNaN(date.getTime())) {
-      throw new ApiValidationError(`Invalid audit ${fieldName} date`);
-    }
-
-    return date;
-  }
-
-  private async resolveAuditActorRole(
-    courseId?: string | number | null,
-    actorUserId?: string | number | null,
-  ): Promise<string | undefined> {
-    if (!courseId || actorUserId === undefined || actorUserId === null) {
-      return undefined;
-    }
-
-    try {
-      return (await this.resolveCourseRole(courseId, actorUserId)) ?? undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private async recordAuditEvent(input: {
-    eventType: AuditEventType;
-    actorUserId?: string | number | null;
-    actorRole?: string | null;
-    courseId?: string | number | null;
-    courseRunId?: string | null;
-    courseVersionId?: string | null;
-    entityType?: string | null;
-    entityId?: string | null;
-    summary: string;
-    metadataJson?: Record<string, unknown> | null;
-  }): Promise<void> {
-    if (!this.auditLogService) {
-      return;
-    }
-
-    const actorUserId =
-      input.actorUserId === undefined || input.actorUserId === null
-        ? undefined
-        : this.toUserId(input.actorUserId);
-    const courseId = input.courseId ? this.toCourseId(input.courseId) : undefined;
-    const actorRole =
-      input.actorRole ?? (await this.resolveAuditActorRole(courseId, actorUserId));
-
-    await this.auditLogService.recordEvent({
-      eventType: input.eventType,
-      actorUserId,
-      actorRole,
-      courseId,
-      courseRunId: input.courseRunId,
-      courseVersionId: input.courseVersionId,
-      entityType: input.entityType,
-      entityId: input.entityId,
-      summary: input.summary,
-      metadataJson: input.metadataJson,
-    });
-  }
-
-  private toOptionalNumber(value: unknown): number | undefined {
-    if (value === undefined || value === null || value === '') {
-      return undefined;
-    }
-
-    const numericValue = Number(value);
-
-    return Number.isFinite(numericValue) ? numericValue : undefined;
-  }
-
-  private normalizeCourseStatus(status: unknown): CourseStatus | undefined {
-    if (status === undefined || status === null || status === '') {
-      return undefined;
-    }
-
-    const normalizedStatus = String(status).toUpperCase() as CourseStatus;
-
-    if (!Object.values(CourseStatus).includes(normalizedStatus)) {
-      throw new ApiValidationError('Invalid course status');
-    }
-
-    return normalizedStatus;
-  }
-
-  private async mapCourseCatalogItemWithCounts(
-    course: Course,
-    enrollment?: Enrollment | null,
-    currentRun?: CourseRun | null,
-  ): Promise<CourseCatalogItemResponseDto> {
-    return {
-      ...mapCourseToCatalogItemDto(course, enrollment, null),
-      currentRun: currentRun
-        ? await this.mapCourseRunWithCounts(currentRun)
-        : undefined,
-    };
+    return method(...args);
   }
 
   private delegateCourseCatalog(methodName: string, args: unknown[]): any {
-    return this.courseCatalogService[methodName](...args);
+    return this.delegateTo(
+      'CourseCatalogService',
+      this.domainServices.courseCatalog,
+      methodName,
+      args,
+    );
   }
 
   private delegateAssignmentGrade(methodName: string, args: unknown[]): any {
-    return this.assignmentGradeService[methodName](...args);
+    return this.delegateTo(
+      'AssignmentGradeService',
+      this.domainServices.assignmentGrade,
+      methodName,
+      args,
+    );
   }
 
   private delegateContentReleaseTemplate(methodName: string, args: unknown[]): any {
-    return this.contentReleaseTemplateService[methodName](...args);
+    return this.delegateTo(
+      'ContentReleaseTemplateService',
+      this.domainServices.contentReleaseTemplate,
+      methodName,
+      args,
+    );
   }
 
   private delegateCourseSearch(methodName: string, args: unknown[]): any {
-    return this.courseSearchService[methodName](...args);
+    return this.delegateTo(
+      'CourseSearchService',
+      this.domainServices.courseSearch,
+      methodName,
+      args,
+    );
   }
 
   private delegateLegacyWorkgroup(methodName: string, args: unknown[]): any {
-    return this.legacyWorkgroupService[methodName](...args);
+    return this.delegateTo(
+      'LegacyWorkgroupService',
+      this.domainServices.legacyWorkgroup,
+      methodName,
+      args,
+    );
   }
 
   private delegateCalendarEvent(methodName: string, args: unknown[]): any {
-    return this.calendarEventService[methodName](...args);
+    return this.delegateTo(
+      'CalendarEventService',
+      this.domainServices.calendarEvent,
+      methodName,
+      args,
+    );
   }
 
   // Course run and content version methods are implemented in the domain service.
   private delegateCourseRunVersion(methodName: string, args: unknown[]): any {
-    return this.courseRunVersionService[methodName](...args);
-  }
-
-  private normalizeCourseRunStatus(...args: any[]): CourseRunStatus | undefined {
-    return this.delegateCourseRunVersion('normalizeCourseRunStatus', args);
-  }
-
-  private normalizeRecurrenceType(...args: any[]): CourseRecurrenceType {
-    return this.delegateCourseRunVersion('normalizeRecurrenceType', args);
-  }
-
-  private toDateOnly(...args: any[]): string {
-    return this.delegateCourseRunVersion('toDateOnly', args);
-  }
-
-  private parseDateOnly(...args: any[]): string | undefined {
-    return this.delegateCourseRunVersion('parseDateOnly', args);
-  }
-
-  private dateFromDateOnly(...args: any[]): Date {
-    return this.delegateCourseRunVersion('dateFromDateOnly', args);
-  }
-
-  private courseStatusToRunStatus(...args: any[]): CourseRunStatus {
-    return this.delegateCourseRunVersion('courseStatusToRunStatus', args);
-  }
-
-  private calculateInitialRunFields(...args: any[]): any {
-    return this.delegateCourseRunVersion('calculateInitialRunFields', args);
-  }
-
-  private calculateNextRunFields(...args: any[]): any {
-    return this.delegateCourseRunVersion('calculateNextRunFields', args);
-  }
-
-  private calculatePlannedNextRunFields(...args: any[]): any {
-    return this.delegateCourseRunVersion('calculatePlannedNextRunFields', args);
-  }
-
-  private calculateSpecialRunFields(...args: any[]): any {
-    return this.delegateCourseRunVersion('calculateSpecialRunFields', args);
-  }
-
-  private normalizeCourseRunTemplateStrategy(...args: any[]): CourseRunTemplateStrategy {
-    return this.delegateCourseRunVersion('normalizeCourseRunTemplateStrategy', args);
-  }
-
-  private async findCurrentCourseRun(...args: any[]): Promise<CourseRun | null> {
-    return this.delegateCourseRunVersion('findCurrentCourseRun', args);
-  }
-
-  private async createInitialCourseRun(...args: any[]): Promise<CourseRun> {
-    return this.delegateCourseRunVersion('createInitialCourseRun', args);
-  }
-
-  private async getCurrentCourseRunOrCreate(...args: any[]): Promise<CourseRun> {
-    return this.delegateCourseRunVersion('getCurrentCourseRunOrCreate', args);
-  }
-
-  private normalizeChangeSummary(...args: any[]): string | undefined {
-    return this.delegateCourseRunVersion('normalizeChangeSummary', args);
-  }
-
-  private async buildCourseVersionContent(...args: any[]): Promise<Record<string, unknown>> {
-    return this.delegateCourseRunVersion('buildCourseVersionContent', args);
-  }
-
-  private async getNextCourseVersionNumber(...args: any[]): Promise<number> {
-    return this.delegateCourseRunVersion('getNextCourseVersionNumber', args);
-  }
-
-  private async findActiveOrLatestCourseVersionForRun(...args: any[]): Promise<CourseVersion | null> {
-    return this.delegateCourseRunVersion('findActiveOrLatestCourseVersionForRun', args);
-  }
-
-  private async attachLegacyRunContentToVersion(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('attachLegacyRunContentToVersion', args);
-  }
-
-  private async getActiveCourseVersionForRunOrThrow(...args: any[]): Promise<CourseVersion> {
-    return this.delegateCourseRunVersion('getActiveCourseVersionForRunOrThrow', args);
-  }
-
-  private async getActiveCourseVersionForCurrentRunOrThrow(...args: any[]): Promise<{ run: CourseRun; version: CourseVersion }> {
-    return this.delegateCourseRunVersion('getActiveCourseVersionForCurrentRunOrThrow', args);
-  }
-
-  private async findCourseVersionInRunOrThrow(...args: any[]): Promise<CourseVersion> {
-    return this.delegateCourseRunVersion('findCourseVersionInRunOrThrow', args);
-  }
-
-  private async refreshCourseVersionContent(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('refreshCourseVersionContent', args);
-  }
-
-  private async findCourseVersionTemplateOrThrow(...args: any[]): Promise<CourseVersion> {
-    return this.delegateCourseRunVersion('findCourseVersionTemplateOrThrow', args);
-  }
-
-  private async resolveCourseRunTemplateVersion(...args: any[]): Promise<CourseVersion | null> {
-    return this.delegateCourseRunVersion('resolveCourseRunTemplateVersion', args);
-  }
-
-  private async assertPlannedRunDoesNotExist(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('assertPlannedRunDoesNotExist', args);
-  }
-
-  private async hydrateCourseVersionTemplateInfo(...args: any[]): Promise<CourseVersion> {
-    return this.delegateCourseRunVersion('hydrateCourseVersionTemplateInfo', args);
-  }
-
-  private async mapCourseVersionWithTemplateInfo(...args: any[]): Promise<CourseVersionResponseDto> {
-    return this.delegateCourseRunVersion('mapCourseVersionWithTemplateInfo', args);
-  }
-
-  private getSnapshotTasks(...args: any[]): any[] {
-    return this.delegateCourseRunVersion('getSnapshotTasks', args);
-  }
-
-  private getSnapshotMaterials(...args: any[]): any[] {
-    return this.delegateCourseRunVersion('getSnapshotMaterials', args);
-  }
-
-  private hasCourseVersionContentSnapshot(...args: any[]): boolean {
-    return this.delegateCourseRunVersion('hasCourseVersionContentSnapshot', args);
-  }
-
-  private async assertCourseVersionReadable(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('assertCourseVersionReadable', args);
-  }
-
-  private async setActiveCourseVersion(...args: any[]): Promise<CourseVersion> {
-    return this.delegateCourseRunVersion('setActiveCourseVersion', args);
-  }
-
-  private async mapCourseRunWithCounts(...args: any[]): Promise<CourseRunResponseDto> {
-    return this.delegateCourseRunVersion('mapCourseRunWithCounts', args);
-  }
-
-  private async assertCourseRunReadable(...args: any[]): Promise<CourseMemberRole | null> {
-    return this.delegateCourseRunVersion('assertCourseRunReadable', args);
-  }
-
-  private async assertCourseRunManageable(...args: any[]): Promise<CourseRun> {
-    return this.delegateCourseRunVersion('assertCourseRunManageable', args);
-  }
-
-  private async setActiveCourseRun(...args: any[]): Promise<CourseRun> {
-    return this.delegateCourseRunVersion('setActiveCourseRun', args);
-  }
-
-  private async copyLearningMaterialsToRun(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('copyLearningMaterialsToRun', args);
-  }
-
-  private async copyTasksToRun(...args: any[]): Promise<Map<string, string>> {
-    return this.delegateCourseRunVersion('copyTasksToRun', args);
-  }
-
-  private cloneJsonValue<T>(...args: any[]): T {
-    return this.delegateCourseRunVersion('cloneJsonValue', args);
-  }
-
-  private async copyCourseVersionContentToRun(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('copyCourseVersionContentToRun', args);
-  }
-
-  private async createInitialContentVersionForRun(...args: any[]): Promise<CourseVersion> {
-    return this.delegateCourseRunVersion('createInitialContentVersionForRun', args);
-  }
-
-  private async deleteUnreferencedMaterialFilesForRun(...args: any[]): Promise<void> {
-    return this.delegateCourseRunVersion('deleteUnreferencedMaterialFilesForRun', args);
-  }
-
-  private normalizeCourseRole(role: string): CourseMemberRole {
-    try {
-      return normalizeCourseRole(role);
-    } catch {
-      throw new ApiValidationError('Invalid course role');
-    }
-  }
-
-  private createExternalCourseId(): string {
-    return `course-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  }
-
-  private requireActorUserId(actorUserId?: string | number): string {
-    if (actorUserId === undefined || actorUserId === null || actorUserId === '') {
-      throw new ApiUnauthorizedError();
-    }
-
-    return this.toUserId(actorUserId);
-  }
-
-  private requireCourseTitle(title: unknown): string {
-    if (typeof title !== 'string' || title.trim().length === 0) {
-      throw new ApiValidationError('Course title is required', ['title must not be empty']);
-    }
-
-    return title.trim();
-  }
-
-  private async findCourseOrThrow(courseId: string | number): Promise<Course> {
-    const course = await this.coursesRepository.findOne({
-      where: { id: this.toCourseId(courseId) },
-    });
-
-    if (!course) {
-      throw new ApiNotFoundError('Course not found');
-    }
-
-    return course;
-  }
-
-  private async resolveCourseRole(
-    courseId: string | number,
-    userId: string | number,
-  ): Promise<CourseMemberRole | null> {
-    const normalizedCourseId = this.toCourseId(courseId);
-    const enrollment = await this.findCourseEnrollment(
-      normalizedCourseId,
-      userId,
+    return this.delegateTo(
+      'CourseRunVersionService',
+      this.domainServices.courseRunVersion,
+      methodName,
+      args,
     );
-
-    if (enrollment) {
-      return this.normalizeCourseRole(enrollment.role);
-    }
-
-    const ownerId = this.toOptionalNumber(userId);
-
-    if (ownerId === undefined) {
-      return null;
-    }
-
-    const ownedCourse = await this.coursesRepository.findOne({
-      where: {
-        id: normalizedCourseId,
-        owner_id: ownerId,
-      },
-    });
-
-    return ownedCourse ? CourseMemberRole.TEACHER : null;
-  }
-
-  private async assertCoursePermission(
-    courseId: string | number,
-    actorUserId: string | number | undefined,
-    permission: CoursePermission,
-  ): Promise<CourseMemberRole> {
-    const normalizedActorId = this.requireActorUserId(actorUserId);
-    const role = await this.resolveCourseRole(courseId, normalizedActorId);
-
-    if (!hasCoursePermission(role, permission)) {
-      throw new ApiForbiddenError(
-        'You do not have permission to access this course resource',
-        'COURSE_ACCESS_DENIED',
-      );
-    }
-
-    return role;
   }
 
   // Learning material methods are implemented in the domain service.
   private delegateLearningMaterial(methodName: string, args: unknown[]): any {
-    return this.learningMaterialService[methodName](...args);
-  }
-
-  private normalizeMaterialType(...args: any[]): LearningMaterialType {
-    return this.delegateLearningMaterial('normalizeMaterialType', args);
-  }
-
-  private parseTags(...args: any[]): string[] {
-    return this.delegateLearningMaterial('parseTags', args);
-  }
-
-  private parsePreviewMetadata(...args: any[]): Record<string, unknown> | undefined {
-    return this.delegateLearningMaterial('parsePreviewMetadata', args);
-  }
-
-  private parseSortOrder(...args: any[]): number {
-    return this.delegateLearningMaterial('parseSortOrder', args);
-  }
-
-  private requireMaterialTitle(...args: any[]): string {
-    return this.delegateLearningMaterial('requireMaterialTitle', args);
-  }
-
-  private validateExternalUrl(...args: any[]): string {
-    return this.delegateLearningMaterial('validateExternalUrl', args);
-  }
-
-  private validateUploadedMaterialFile(file?: UploadedLearningMaterialFile): asserts file is UploadedLearningMaterialFile & {
-    buffer: Buffer;
-    mimetype: string;
-    originalname: string;
-    size: number;
-  } {
-    this.delegateLearningMaterial('validateUploadedMaterialFile', [file]);
-  }
-
-  private normalizeMaterialReleaseMode(...args: any[]): LearningMaterialReleaseMode {
-    return this.delegateLearningMaterial('normalizeMaterialReleaseMode', args);
-  }
-
-  private hasProvidedValue(...args: any[]): boolean {
-    return this.delegateLearningMaterial('hasProvidedValue', args);
-  }
-
-  private hasOwnInputField(...args: any[]): boolean {
-    return this.delegateLearningMaterial('hasOwnInputField', args);
-  }
-
-  private parseReleaseDate(...args: any[]): Date | null {
-    return this.delegateLearningMaterial('parseReleaseDate', args);
-  }
-
-  private async applyLearningMaterialReleaseConfiguration(...args: any[]): Promise<void> {
-    return this.delegateLearningMaterial('applyLearningMaterialReleaseConfiguration', args);
-  }
-
-  private async buildLearningMaterialVisibility(...args: any[]): Promise<LearningMaterialVisibility> {
-    return this.delegateLearningMaterial('buildLearningMaterialVisibility', args);
-  }
-
-  private async mapLearningMaterialForActor(...args: any[]): Promise<LearningMaterialResponseDto> {
-    return this.delegateLearningMaterial('mapLearningMaterialForActor', args);
-  }
-
-  private formatGermanDateTime(...args: any[]): string {
-    return this.delegateLearningMaterial('formatGermanDateTime', args);
-  }
-
-  private async findLearningMaterialOrThrow(...args: any[]): Promise<LearningMaterial> {
-    return this.delegateLearningMaterial('findLearningMaterialOrThrow', args);
-  }
-
-  private async assertLearningMaterialReadable(...args: any[]): Promise<CourseMemberRole> {
-    return this.delegateLearningMaterial('assertLearningMaterialReadable', args);
-  }
-
-  private async assertLearningMaterialManageable(...args: any[]): Promise<void> {
-    return this.delegateLearningMaterial('assertLearningMaterialManageable', args);
-  }
-
-  private async findCourseEnrollment(
-    courseId: string,
-    userId: string | number,
-    courseRunId?: string,
-  ): Promise<Enrollment | null> {
-    const resolvedRunId =
-      courseRunId ?? (await this.findCurrentCourseRun(courseId))?.id;
-
-    return this.enrollmentRepository.findOne({
-      where: {
-        courseId,
-        ...(resolvedRunId ? { courseRunId: resolvedRunId } : {}),
-        userId: this.toUserId(userId),
-      },
-    });
-  }
-
-  private normalizeOptionalText(value: unknown): string | null {
-    if (value === undefined || value === null) {
-      return null;
-    }
-
-    const text = String(value).trim();
-
-    return text.length > 0 ? text : null;
-  }
-
-  private parsePaginationValue(
-    value: unknown,
-    defaultValue: number,
-    maxValue?: number,
-  ): number {
-    const numericValue =
-      value === undefined || value === null || value === ''
-        ? defaultValue
-        : Number(value);
-
-    if (!Number.isInteger(numericValue) || numericValue < 1) {
-      throw new ApiValidationError('Pagination values must be positive integers');
-    }
-
-    return maxValue ? Math.min(numericValue, maxValue) : numericValue;
-  }
-
-  private ensureValidAssignmentMaxPoints(assignment: Assignment): number {
-    const maxPoints = Number(assignment.maxPoints);
-
-    if (!Number.isFinite(maxPoints) || maxPoints < 0) {
-      throw new ApiValidationError('Assignment max points must be non-negative');
-    }
-
-    return maxPoints;
-  }
-
-  private ensureValidAutomaticGradePoints(
-    pointsAchieved: unknown,
-    maxPoints: number,
-  ): number {
-    const numericPoints = Number(pointsAchieved);
-
-    if (!Number.isFinite(numericPoints)) {
-      throw new ApiValidationError('Grade points must be a valid number');
-    }
-
-    if (numericPoints < 0) {
-      throw new ApiValidationError('Grade points cannot be negative');
-    }
-
-    if (numericPoints > maxPoints) {
-      throw new ApiValidationError(
-        'Grade points cannot be greater than assignment max points',
-      );
-    }
-
-    return numericPoints;
+    return this.delegateTo(
+      'LearningMaterialService',
+      this.domainServices.learningMaterial,
+      methodName,
+      args,
+    );
   }
 
   async findAll(...args: any[]): Promise<any> {
@@ -1098,7 +286,7 @@ export class CoursesService {
     courseId: string,
     actorUserId?: string | number,
   ): Promise<CourseResultResponseDto> {
-    return this.courseResultService.getMyCourseResult(courseId, actorUserId);
+    return this.domainServices.courseResult.getMyCourseResult(courseId, actorUserId);
   }
 
   async getCourseResults(
@@ -1106,7 +294,7 @@ export class CoursesService {
     query: CourseResultListQueryDto = {},
     actorUserId?: string | number,
   ): Promise<CourseResultListResponseDto> {
-    return this.courseResultService.getCourseResults(courseId, query, actorUserId);
+    return this.domainServices.courseResult.getCourseResults(courseId, query, actorUserId);
   }
 
   async getCourseResultsByRun(
@@ -1115,7 +303,7 @@ export class CoursesService {
     query: CourseResultListQueryDto = {},
     actorUserId?: string | number,
   ): Promise<CourseResultListResponseDto> {
-    return this.courseResultService.getCourseResultsByRun(courseId, runId, query, actorUserId);
+    return this.domainServices.courseResult.getCourseResultsByRun(courseId, runId, query, actorUserId);
   }
 
   async setManualCourseResult(
@@ -1124,7 +312,7 @@ export class CoursesService {
     body: ManualCourseResultDto,
     actorUserId?: string | number,
   ): Promise<CourseResultResponseDto> {
-    return this.courseResultService.setManualCourseResult(courseId, studentId, body, actorUserId);
+    return this.domainServices.courseResult.setManualCourseResult(courseId, studentId, body, actorUserId);
   }
 
   async recalculateCourseResult(
@@ -1132,14 +320,14 @@ export class CoursesService {
     studentId: string,
     actorUserId?: string | number,
   ): Promise<CourseResultResponseDto> {
-    return this.courseResultService.recalculateCourseResult(courseId, studentId, actorUserId);
+    return this.domainServices.courseResult.recalculateCourseResult(courseId, studentId, actorUserId);
   }
 
   async recalculateAllCourseResults(
     courseId: string,
     actorUserId?: string | number,
   ): Promise<CourseResultListResponseDto> {
-    return this.courseResultService.recalculateAllCourseResults(courseId, actorUserId);
+    return this.domainServices.courseResult.recalculateAllCourseResults(courseId, actorUserId);
   }
 
   // Assignment methods
@@ -1277,62 +465,13 @@ export class CoursesService {
   }
 
   // Learning task and progress methods are implemented in the domain service.
-  private readonly learningTaskService = new LearningTaskService(this as any).api;
-
   private delegateLearningTask(methodName: string, args: unknown[]): any {
-    return this.learningTaskService[methodName](...args);
-  }
-
-  private requireTaskTitle(...args: any[]): string {
-    return this.delegateLearningTask('requireTaskTitle', args);
-  }
-
-  private parseTaskAssessmentNumber(...args: any[]): number | null {
-    return this.delegateLearningTask('parseTaskAssessmentNumber', args);
-  }
-
-  private async initializeImmediateTaskProgressForEnrollment(...args: any[]): Promise<void> {
-    return this.delegateLearningTask('initializeImmediateTaskProgressForEnrollment', args);
-  }
-
-  private async findLearningTaskOrThrow(...args: any[]): Promise<Task> {
-    return this.delegateLearningTask('findLearningTaskOrThrow', args);
-  }
-
-  private async assertTaskReadable(...args: any[]): Promise<CourseMemberRole> {
-    return this.delegateLearningTask('assertTaskReadable', args);
-  }
-
-  private async findStudentEnrollmentOrThrow(...args: any[]): Promise<Enrollment> {
-    return this.delegateLearningTask('findStudentEnrollmentOrThrow', args);
-  }
-
-  private async assertCurrentStudentEnrollment(...args: any[]): Promise<Enrollment> {
-    return this.delegateLearningTask('assertCurrentStudentEnrollment', args);
-  }
-
-  private async ensureTaskProgress(...args: any[]): Promise<TaskProgress> {
-    return this.delegateLearningTask('ensureTaskProgress', args);
-  }
-
-  private async ensureTaskAssessment(...args: any[]): Promise<TaskAssessment> {
-    return this.delegateLearningTask('ensureTaskAssessment', args);
-  }
-
-  private async saveTaskAssessment(...args: any[]): Promise<TaskAssessment> {
-    return this.delegateLearningTask('saveTaskAssessment', args);
-  }
-
-  private async applyAssessmentToProgress(...args: any[]): Promise<void> {
-    return this.delegateLearningTask('applyAssessmentToProgress', args);
-  }
-
-  private async buildLearningPathForEnrollment(...args: any[]): Promise<LearningPathResponseDto> {
-    return this.delegateLearningTask('buildLearningPathForEnrollment', args);
-  }
-
-  private isTaskCompletionSuccessful(...args: any[]): boolean {
-    return this.delegateLearningTask('isTaskCompletionSuccessful', args);
+    return this.delegateTo(
+      'LearningTaskService',
+      this.domainServices.learningTask,
+      methodName,
+      args,
+    );
   }
 
   async createLearningTask(...args: any[]): Promise<any> {

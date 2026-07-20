@@ -1,4 +1,5 @@
 import { CoursePermission, hasCoursePermission } from '../courses.permissions';
+import { CourseDomainService } from './course-domain.service';
 import { ApiForbiddenError, ApiNotFoundError, ApiValidationError } from '../common/api-errors';
 import {
   CourseCatalogItemResponseDto,
@@ -14,43 +15,12 @@ import { AuditEventType } from '../entities/audit-event.entity';
 import { Course, CourseStatus } from '../entities/course.entity';
 import { CourseMemberRole, Enrollment } from '../entities/enrollment.entity';
 
-type CourseServiceFacade = any;
 
-export class CourseCatalogService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class CourseCatalogService extends CourseDomainService {
 
   async findAll(userId?: string | number): Promise<CourseResponseDto[]> {
     if (userId === undefined || userId === null) {
-      const courses = await this.coursesRepository.find();
+      const courses = await this.repositories.courses.find();
       return courses.map(mapCourseToDto);
     }
 
@@ -58,14 +28,14 @@ export class CourseCatalogService {
     const ownerId = this.toOptionalNumber(userId);
 
     if (ownerId !== undefined) {
-      const ownedCourses = await this.coursesRepository.find({
+      const ownedCourses = await this.repositories.courses.find({
         where: { owner_id: ownerId },
       });
 
       ownedCourses.forEach((course) => coursesById.set(course.id, course));
     }
 
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: { userId: this.toUserId(userId) },
       relations: ['course', 'courseRun'],
     });
@@ -83,7 +53,7 @@ export class CourseCatalogService {
     actorUserId?: string | number,
   ): Promise<CourseCatalogItemResponseDto[]> {
     const actorId = this.requireActorUserId(actorUserId);
-    const courses = await this.coursesRepository.find({
+    const courses = await this.repositories.courses.find({
       where: {
         status: CourseStatus.PUBLISHED,
       },
@@ -91,7 +61,7 @@ export class CourseCatalogService {
         title: 'ASC',
       },
     });
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: {
         userId: actorId,
       },
@@ -127,7 +97,7 @@ export class CourseCatalogService {
   ): Promise<CourseCatalogItemResponseDto[]> {
     const actorId = this.requireActorUserId(actorUserId);
     const coursesById = new Map<string, CourseCatalogItemResponseDto>();
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: {
         userId: actorId,
       },
@@ -152,7 +122,7 @@ export class CourseCatalogService {
     const ownerId = this.toOptionalNumber(actorId);
 
     if (ownerId !== undefined) {
-      const ownedCourses = await this.coursesRepository.find({
+      const ownedCourses = await this.repositories.courses.find({
         where: {
           owner_id: ownerId,
         },
@@ -185,7 +155,7 @@ export class CourseCatalogService {
   }
 
   async findOne(id: string | number): Promise<CourseResponseDto> {
-    const course = await this.coursesRepository.findOne({
+    const course = await this.repositories.courses.findOne({
       where: { id: this.toCourseId(id) },
       relations: ['versions', 'enrollments', 'groups'],
     });
@@ -247,7 +217,7 @@ export class CourseCatalogService {
     );
 
     const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: currentRun.id,
@@ -263,7 +233,7 @@ export class CourseCatalogService {
     actorUserId?: string | number,
   ): Promise<EnrollmentResponseDto[]> {
     const run = await this.assertCourseRunManageable(courseId, runId, actorUserId);
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: run.id,
@@ -339,7 +309,7 @@ export class CourseCatalogService {
     course.created_by = actorId ?? ownerId?.toString();
     course.updated_by = actorId ?? ownerId?.toString();
 
-    const savedCourse = await this.coursesRepository.save(course);
+    const savedCourse = await this.repositories.courses.save(course);
     const initialRun = await this.createInitialCourseRun(savedCourse, actorId, body);
     const initialVersion = await this.createInitialContentVersionForRun(
       savedCourse,
@@ -366,7 +336,7 @@ export class CourseCatalogService {
         enrollment.createdBy = actorId ?? this.toUserId(ownerId);
         enrollment.updatedBy = actorId ?? this.toUserId(ownerId);
 
-        await this.enrollmentRepository.save(enrollment);
+        await this.repositories.enrollments.save(enrollment);
       }
     }
 
@@ -431,7 +401,7 @@ export class CourseCatalogService {
   ): Promise<EnrollmentResponseDto> {
     const actorId = this.requireActorUserId(actorUserId);
     const normalizedCourseId = this.toCourseId(courseId);
-    const course = await this.coursesRepository.findOne({
+    const course = await this.repositories.courses.findOne({
       where: { id: normalizedCourseId },
     });
 
@@ -487,7 +457,7 @@ export class CourseCatalogService {
     enrollment.createdBy = actorId;
     enrollment.updatedBy = actorId;
 
-    const savedEnrollment = await this.enrollmentRepository.save(enrollment);
+    const savedEnrollment = await this.repositories.enrollments.save(enrollment);
     await this.initializeImmediateTaskProgressForEnrollment(
       normalizedCourseId,
       savedEnrollment,
@@ -530,7 +500,7 @@ export class CourseCatalogService {
       );
     }
 
-    const result = await this.enrollmentRepository.delete({
+    const result = await this.repositories.enrollments.delete({
       courseId: this.toCourseId(courseId),
       courseRunId: (await this.getCurrentCourseRunOrCreate(courseId)).id,
       userId: normalizedUserId,
@@ -560,7 +530,7 @@ export class CourseCatalogService {
     const actorId = this.requireActorUserId(actorUserId);
     await this.assertCoursePermission(id, actorId, CoursePermission.ManageCourse);
 
-    const course = await this.coursesRepository.findOne({
+    const course = await this.repositories.courses.findOne({
       where: { id: this.toCourseId(id) },
     });
 
@@ -611,7 +581,7 @@ export class CourseCatalogService {
 
     course.updated_by = actorId;
 
-    const savedCourse = await this.coursesRepository.save(course);
+    const savedCourse = await this.repositories.courses.save(course);
     await this.recordAuditEvent({
       eventType: AuditEventType.COURSE_UPDATED,
       actorUserId: actorId,
@@ -653,7 +623,7 @@ export class CourseCatalogService {
     enrollment.role = this.normalizeCourseRole(role);
     enrollment.updatedBy = actorId;
 
-    return mapEnrollmentToDto(await this.enrollmentRepository.save(enrollment));
+    return mapEnrollmentToDto(await this.repositories.enrollments.save(enrollment));
   }
 
   async removeCourse(
@@ -661,7 +631,7 @@ export class CourseCatalogService {
     actorUserId?: string | number,
   ): Promise<void> {
     await this.assertCoursePermission(id, actorUserId, CoursePermission.ManageCourse);
-    const result = await this.coursesRepository.delete(this.toCourseId(id));
+    const result = await this.repositories.courses.delete(this.toCourseId(id));
 
     if (result.affected === 0) {
       throw new ApiNotFoundError('Course not found');

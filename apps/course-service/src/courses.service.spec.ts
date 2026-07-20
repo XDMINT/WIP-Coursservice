@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 
 import { CoursesService } from './courses.service';
+import { CourseRepositories } from './persistence/course-repositories';
 import { Course, CourseStatus } from './entities/course.entity';
 import { CourseRun, CourseRunStatus } from './entities/course-run.entity';
 import { CourseMemberRole, Enrollment } from './entities/enrollment.entity';
@@ -120,22 +121,24 @@ const createService = (
     save: jest.fn((entity) => Promise.resolve(entity)),
   };
   const service = new CoursesService(
-    courseRepository as any,
-    courseRunRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    enrollmentRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
+    new CourseRepositories({
+      assignments: emptyRepository() as any,
+      calendarEvents: emptyRepository() as any,
+      contentReleases: emptyRepository() as any,
+      contentTemplates: emptyRepository() as any,
+      courseGroups: emptyRepository() as any,
+      courseResults: emptyRepository() as any,
+      courseRuns: courseRunRepository as any,
+      courses: courseRepository as any,
+      courseVersions: emptyRepository() as any,
+      enrollments: enrollmentRepository as any,
+      grades: emptyRepository() as any,
+      groupMemberships: emptyRepository() as any,
+      learningMaterials: emptyRepository() as any,
+      taskAssessments: emptyRepository() as any,
+      taskProgress: emptyRepository() as any,
+      tasks: emptyRepository() as any,
+    }),
     {
       deleteFile: jest.fn(),
       openFile: jest.fn(),

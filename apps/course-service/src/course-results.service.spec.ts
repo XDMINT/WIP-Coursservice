@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 
 import { COURSE_PASSING_THRESHOLD_PERCENT } from './course-result.rules';
 import { CoursesService } from './courses.service';
+import { CourseRepositories } from './persistence/course-repositories';
 import { Assignment } from './entities/assignment.entity';
 import {
   CoursePassStatus,
@@ -210,22 +211,24 @@ const createFixture = (options: {
   const gradeRepository = createRepository(options.grades ?? [], 'grade');
   const resultRepository = createRepository(options.results ?? [], 'result');
   const service = new CoursesService(
-    courseRepository as any,
-    courseRunRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    assignmentRepository as any,
-    gradeRepository as any,
-    resultRepository as any,
-    enrollmentRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
+    new CourseRepositories({
+      assignments: assignmentRepository as any,
+      calendarEvents: emptyRepository() as any,
+      contentReleases: emptyRepository() as any,
+      contentTemplates: emptyRepository() as any,
+      courseGroups: emptyRepository() as any,
+      courseResults: resultRepository as any,
+      courseRuns: courseRunRepository as any,
+      courses: courseRepository as any,
+      courseVersions: emptyRepository() as any,
+      enrollments: enrollmentRepository as any,
+      grades: gradeRepository as any,
+      groupMemberships: emptyRepository() as any,
+      learningMaterials: emptyRepository() as any,
+      taskAssessments: emptyRepository() as any,
+      taskProgress: emptyRepository() as any,
+      tasks: emptyRepository() as any,
+    }),
     {
       deleteFile: jest.fn(),
       openFile: jest.fn(),

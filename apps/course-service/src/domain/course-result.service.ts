@@ -21,11 +21,10 @@ import {
 } from '../dto/course-result.dto';
 import { CoursePermission } from '../courses.permissions';
 import { ApiValidationError } from '../common/api-errors';
-
-type CourseServiceFacade = any;
+import { CourseDomainFacade } from './course-domain.context';
 
 export class CourseResultService {
-  constructor(private readonly courseService: CourseServiceFacade) {}
+  constructor(private readonly courseService: CourseDomainFacade) {}
 
   async getMyCourseResult(
     courseId: string,
@@ -133,7 +132,7 @@ export class CourseResultService {
     result.updatedBy = actorId;
 
     return mapCourseResultToDto(
-      await this.courseService.courseResultRepository.save(result),
+      await this.courseService.repositories.courseResults.save(result),
     );
   }
 
@@ -161,7 +160,7 @@ export class CourseResultService {
   ): Promise<CourseResultListResponseDto> {
     const actorId = await this.assertCourseResultManager(courseId, actorUserId);
     const currentRun = await this.courseService.getCurrentCourseRunOrCreate(courseId);
-    const enrollments = await this.courseService.enrollmentRepository.find({
+    const enrollments = await this.courseService.repositories.enrollments.find({
       where: {
         courseId: this.courseService.toCourseId(courseId),
         courseRunId: currentRun.id,
@@ -301,7 +300,7 @@ export class CourseResultService {
     courseId: string,
     enrollmentId: string,
   ): Promise<CourseResult | null> {
-    return this.courseService.courseResultRepository.findOne({
+    return this.courseService.repositories.courseResults.findOne({
       where: {
         courseId,
         enrollmentId,
@@ -345,14 +344,14 @@ export class CourseResultService {
     enrollment: Enrollment,
     actorId: string,
   ): Promise<CourseResultResponseDto> {
-    const assignments = await this.courseService.assignmentRepository.find({
+    const assignments = await this.courseService.repositories.assignments.find({
       where: {
         course: { id: courseId },
         courseRunId: enrollment.courseRunId,
         isGraded: true,
       },
     }) as any[];
-    const grades = await this.courseService.gradeRepository.find({
+    const grades = await this.courseService.repositories.grades.find({
       where: { enrollment: { id: enrollment.id } },
       relations: ['assignment'],
     }) as any[];
@@ -412,7 +411,7 @@ export class CourseResultService {
     result.updatedBy = actorId;
 
     return mapCourseResultToDto(
-      await this.courseService.courseResultRepository.save(result),
+      await this.courseService.repositories.courseResults.save(result),
     );
   }
 
@@ -425,7 +424,7 @@ export class CourseResultService {
     const pageSize = this.courseService.parsePaginationValue(query.pageSize, 10, 100);
     const passStatus = this.normalizeOptionalPassStatus(query.passStatus);
     const source = this.normalizeOptionalCourseResultSource(query.source);
-    const enrollments = await this.courseService.enrollmentRepository.find({
+    const enrollments = await this.courseService.repositories.enrollments.find({
       where: {
         courseId: this.courseService.toCourseId(courseId),
         courseRunId,
@@ -435,7 +434,7 @@ export class CourseResultService {
         userId: 'ASC',
       },
     }) as Enrollment[];
-    const results = await this.courseService.courseResultRepository.find({
+    const results = await this.courseService.repositories.courseResults.find({
       where: {
         courseId: this.courseService.toCourseId(courseId),
         courseRunId,

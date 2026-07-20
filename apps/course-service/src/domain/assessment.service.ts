@@ -11,11 +11,10 @@ import {
 } from '../dto/learning-process.dto';
 import { TASK_PASS_THRESHOLD_PERCENT } from '../task-assessment.rules';
 import { AuditEventType } from '../entities/audit-event.entity';
-
-type CourseServiceFacade = any;
+import { CourseDomainFacade } from './course-domain.context';
 
 export class AssessmentService {
-  constructor(private readonly courseService: CourseServiceFacade) {}
+  constructor(private readonly courseService: CourseDomainFacade) {}
 
   async mockEvaluateLearningTask(
     taskId: string,
@@ -58,7 +57,7 @@ export class AssessmentService {
       ...(body.submissionData ?? {}),
       ...(body.passed !== undefined ? { passed: body.passed } : {}),
     };
-    const result = await this.courseService.getTaskServiceClient().evaluateSubmission({
+    const result = await this.courseService.getTaskEvaluationClient().evaluateSubmission({
       task,
       studentId: enrollment.userId,
       submissionData,

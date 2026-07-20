@@ -1,4 +1,5 @@
 import { calculateCoursePassStatus } from '../course-result.rules';
+import { CourseDomainService } from './course-domain.service';
 import { ApiNotFoundError } from '../common/api-errors';
 import { CoursePermission } from '../courses.permissions';
 import { Assignment } from '../entities/assignment.entity';
@@ -7,39 +8,8 @@ import { CoursePassStatus } from '../entities/course-result.entity';
 import { Enrollment } from '../entities/enrollment.entity';
 import { Grade } from '../entities/grade.entity';
 
-type CourseServiceFacade = any;
 
-export class AssignmentGradeService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class AssignmentGradeService extends CourseDomainService {
 
   private async assertCourseReadable(
     courseId: string,
@@ -74,7 +44,7 @@ export class AssignmentGradeService {
   }
 
   private async findAssignmentWithCourseOrThrow(id: string): Promise<Assignment> {
-    const assignment = await this.assignmentRepository.findOne({
+    const assignment = await this.repositories.assignments.findOne({
       where: { id },
       relations: ['course'],
     });
@@ -108,7 +78,7 @@ export class AssignmentGradeService {
       return;
     }
 
-    const enrollment = await this.enrollmentRepository.findOne({
+    const enrollment = await this.repositories.enrollments.findOne({
       where: { id: enrollmentId },
     });
 
@@ -159,7 +129,7 @@ export class AssignmentGradeService {
     assignment.courseRunId = currentRun.id;
     assignment.courseRun = currentRun;
 
-    return this.assignmentRepository.save(assignment);
+    return this.repositories.assignments.save(assignment);
   }
 
   async getAssignmentsByCourse(
@@ -169,7 +139,7 @@ export class AssignmentGradeService {
     await this.assertCourseReadable(courseId, actorUserId);
     const currentRun = await this.getCurrentCourseRunOrCreate(courseId);
 
-    return this.assignmentRepository.find({
+    return this.repositories.assignments.find({
       where: {
         course: { id: courseId },
         courseRunId: currentRun.id,
@@ -185,7 +155,7 @@ export class AssignmentGradeService {
     const assignment = await this.findAssignmentWithCourseOrThrow(id);
     await this.assertAssignmentReadable(assignment, actorUserId);
 
-    return this.assignmentRepository.findOne({
+    return this.repositories.assignments.findOne({
       where: { id },
       relations: ['grades'],
     });
@@ -217,7 +187,7 @@ export class AssignmentGradeService {
     assignment.isGraded = isGraded;
     assignment.updatedBy = actorId ?? updatedBy;
 
-    return this.assignmentRepository.save(assignment);
+    return this.repositories.assignments.save(assignment);
   }
 
   async deleteAssignment(
@@ -227,7 +197,7 @@ export class AssignmentGradeService {
     const assignment = await this.findAssignmentWithCourseOrThrow(id);
     await this.assertAssignmentManageable(assignment, actorUserId);
 
-    await this.assignmentRepository.delete(id);
+    await this.repositories.assignments.delete(id);
   }
 
   async publishAssignment(
@@ -241,7 +211,7 @@ export class AssignmentGradeService {
     assignment.isPublished = true;
     assignment.updatedBy = actorId ?? updatedBy;
 
-    return this.assignmentRepository.save(assignment);
+    return this.repositories.assignments.save(assignment);
   }
 
   async unpublishAssignment(
@@ -255,7 +225,7 @@ export class AssignmentGradeService {
     assignment.isPublished = false;
     assignment.updatedBy = actorId ?? updatedBy;
 
-    return this.assignmentRepository.save(assignment);
+    return this.repositories.assignments.save(assignment);
   }
 
   async createGrade(
@@ -267,7 +237,7 @@ export class AssignmentGradeService {
     isFinal: boolean,
     actorUserId?: string | number,
   ): Promise<Grade> {
-    const assignment = await this.assignmentRepository.findOne({
+    const assignment = await this.repositories.assignments.findOne({
       where: { id: assignmentId },
       relations: ['course'],
     });
@@ -299,7 +269,7 @@ export class AssignmentGradeService {
     enrollment.id = enrollmentId;
     grade.enrollment = enrollment;
 
-    return this.gradeRepository.save(grade);
+    return this.repositories.grades.save(grade);
   }
 
   async getGradesByAssignment(
@@ -316,7 +286,7 @@ export class AssignmentGradeService {
       );
     }
 
-    return this.gradeRepository.find({
+    return this.repositories.grades.find({
       where: { assignment: { id: assignmentId } },
       relations: ['enrollment', 'assignment'],
     });
@@ -328,7 +298,7 @@ export class AssignmentGradeService {
   ): Promise<Grade[]> {
     await this.assertEnrollmentGradesReadable(enrollmentId, actorUserId);
 
-    return this.gradeRepository.find({
+    return this.repositories.grades.find({
       where: { enrollment: { id: enrollmentId } },
       relations: ['assignment'],
     });
@@ -338,7 +308,7 @@ export class AssignmentGradeService {
     id: string,
     actorUserId?: string | number,
   ): Promise<Grade> {
-    const grade = await this.gradeRepository.findOne({
+    const grade = await this.repositories.grades.findOne({
       where: { id },
       relations: ['enrollment', 'assignment', 'assignment.course'],
     });
@@ -370,7 +340,7 @@ export class AssignmentGradeService {
     updatedBy: string,
     actorUserId?: string | number,
   ): Promise<Grade> {
-    const grade = await this.gradeRepository.findOne({
+    const grade = await this.repositories.grades.findOne({
       where: { id },
       relations: ['assignment', 'assignment.course'],
     });
@@ -381,7 +351,7 @@ export class AssignmentGradeService {
 
     const assignment = grade.assignment?.course?.id
       ? grade.assignment
-      : await this.assignmentRepository.findOne({
+      : await this.repositories.assignments.findOne({
           where: { id: (grade as any).assignmentId },
           relations: ['course'],
         });
@@ -405,14 +375,14 @@ export class AssignmentGradeService {
     grade.isFinal = isFinal;
     grade.updatedBy = actorId ?? updatedBy;
 
-    return this.gradeRepository.save(grade);
+    return this.repositories.grades.save(grade);
   }
 
   async deleteGrade(
     id: string,
     actorUserId?: string | number,
   ): Promise<void> {
-    const grade = await this.gradeRepository.findOne({
+    const grade = await this.repositories.grades.findOne({
       where: { id },
       relations: ['assignment', 'assignment.course'],
     });
@@ -423,7 +393,7 @@ export class AssignmentGradeService {
 
     await this.assertAssignmentManageable(grade.assignment, actorUserId);
 
-    await this.gradeRepository.delete(id);
+    await this.repositories.grades.delete(id);
   }
 
   async calculateCourseGrade(
@@ -431,7 +401,7 @@ export class AssignmentGradeService {
     enrollmentId: string,
     actorUserId?: string | number,
   ): Promise<{ grade: number; passed: boolean }> {
-    const enrollment = await this.enrollmentRepository.findOne({
+    const enrollment = await this.repositories.enrollments.findOne({
       where: { id: enrollmentId },
     });
 
@@ -442,7 +412,7 @@ export class AssignmentGradeService {
     await this.assertEnrollmentGradesReadable(enrollmentId, actorUserId);
 
     // Get all assignments for the course
-    const assignments = await this.assignmentRepository.find({
+    const assignments = await this.repositories.assignments.find({
       where: { course: { id: courseId }, isGraded: true },
     });
 
@@ -451,7 +421,7 @@ export class AssignmentGradeService {
     }
 
     // Get all grades for the enrollment
-    const grades = await this.gradeRepository.find({
+    const grades = await this.repositories.grades.find({
       where: { enrollment: { id: enrollmentId } },
       relations: ['assignment'],
     });
@@ -503,7 +473,7 @@ export class AssignmentGradeService {
     }
 
     // Get all enrollments for the course
-    const enrollments = await this.enrollmentRepository.find({
+    const enrollments = await this.repositories.enrollments.find({
       where: { courseId: courseId },
     });
 

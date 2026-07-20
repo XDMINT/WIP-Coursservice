@@ -14,6 +14,7 @@ import { CourseMemberRole, Enrollment } from './entities/enrollment.entity';
 import { Task } from './entities/task.entity';
 import { TaskProgress, TaskProgressStatus } from './entities/task-progress.entity';
 import { LocalMaterialStorage } from './storage/material-storage';
+import { CourseRepositories } from './persistence/course-repositories';
 
 const emptyRepository = () => ({
   delete: jest.fn(),
@@ -248,22 +249,24 @@ const createService = (options: {
     ...options.storage,
   };
   const service = new CoursesService(
-    courseRepository as any,
-    courseRunRepository as any,
-    courseVersionRepository as any,
-    materialRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    enrollmentRepository as any,
-    taskRepository as any,
-    emptyRepository() as any,
-    taskProgressRepository as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
-    emptyRepository() as any,
+    new CourseRepositories({
+      assignments: emptyRepository() as any,
+      calendarEvents: emptyRepository() as any,
+      contentReleases: emptyRepository() as any,
+      contentTemplates: emptyRepository() as any,
+      courseGroups: emptyRepository() as any,
+      courseResults: emptyRepository() as any,
+      courseRuns: courseRunRepository as any,
+      courses: courseRepository as any,
+      courseVersions: courseVersionRepository as any,
+      enrollments: enrollmentRepository as any,
+      grades: emptyRepository() as any,
+      groupMemberships: emptyRepository() as any,
+      learningMaterials: materialRepository as any,
+      taskAssessments: emptyRepository() as any,
+      taskProgress: taskProgressRepository as any,
+      tasks: taskRepository as any,
+    }),
     storage as any,
   );
 

@@ -26,6 +26,9 @@ import { ContentTemplate } from './entities/content-template.entity';
 import { CalendarEvent } from './entities/calendar-event.entity';
 import { LocalMaterialStorage } from './storage/material-storage';
 import { TaskServiceClient } from './task-service.client';
+import { TaskEvaluationClient } from './task-evaluation.client';
+import { CourseRepositories } from './persistence/course-repositories';
+import { CourseRepositoriesProvider } from './persistence/course-repositories.provider';
 
 @Module({
   imports: [
@@ -58,6 +61,12 @@ import { TaskServiceClient } from './task-service.client';
     LocalMaterialStorage,
     AuditLogService,
     TaskServiceClient,
+    TaskEvaluationClient,
+    CourseRepositoriesProvider,
+    {
+      provide: CourseRepositories,
+      useExisting: CourseRepositoriesProvider,
+    },
   ],
 
   exports: [CoursesService, AuditLogService],

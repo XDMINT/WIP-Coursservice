@@ -73,7 +73,7 @@ export class Course {
     @Column({
         name: 'recurrence_type',
         type: 'varchar',
-        default: CourseRecurrenceType.CONTINUOUS,
+        default: 'CONTINUOUS',
     })
     recurrenceType: CourseRecurrenceType;
 

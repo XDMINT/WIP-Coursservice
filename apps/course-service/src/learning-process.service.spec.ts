@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 
 import { CoursesService } from './courses.service';
+import { CourseRepositories } from './persistence/course-repositories';
 import { Course, CourseStatus } from './entities/course.entity';
 import { CourseRun, CourseRunStatus } from './entities/course-run.entity';
 import { CourseVersion, CourseVersionStatus } from './entities/course-version.entity';
@@ -331,25 +332,28 @@ const createLearningProcessFixture = (
     }),
   };
   const service = new CoursesService(
-    courseRepository as any,
-    courseRunRepository as any,
-    courseVersionRepository as any,
-    createRepository([], 'material') as any,
-    createRepository([], 'assignment') as any,
-    createRepository([], 'grade') as any,
-    createRepository([], 'result') as any,
-    enrollmentRepository as any,
-    taskRepository as any,
-    taskAssessmentRepository as any,
-    taskProgressRepository as any,
-    createRepository([], 'release') as any,
-    createRepository([], 'template') as any,
-    courseGroupRepository as any,
-    groupMembershipRepository as any,
-    createRepository([], 'calendar') as any,
+    new CourseRepositories({
+      assignments: createRepository([], 'assignment') as any,
+      calendarEvents: createRepository([], 'calendar') as any,
+      contentReleases: createRepository([], 'release') as any,
+      contentTemplates: createRepository([], 'template') as any,
+      courseGroups: courseGroupRepository as any,
+      courseResults: createRepository([], 'result') as any,
+      courseRuns: courseRunRepository as any,
+      courses: courseRepository as any,
+      courseVersions: courseVersionRepository as any,
+      enrollments: enrollmentRepository as any,
+      grades: createRepository([], 'grade') as any,
+      groupMemberships: groupMembershipRepository as any,
+      groupTaskProgress: groupTaskProgressRepository as any,
+      learningMaterials: createRepository([], 'material') as any,
+      taskAssessments: taskAssessmentRepository as any,
+      taskProgress: taskProgressRepository as any,
+      tasks: taskRepository as any,
+    }),
     materialStorage as any,
     auditLogService as any,
-    groupTaskProgressRepository as any,
+    undefined,
     taskEvaluationClient as any,
   );
 

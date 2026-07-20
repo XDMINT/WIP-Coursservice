@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { In, IsNull, Not } from 'typeorm';
+import { CourseDomainService } from './course-domain.service';
 import { CoursePermission, hasCoursePermission } from '../courses.permissions';
 import { ApiForbiddenError, ApiNotFoundError, ApiValidationError } from '../common/api-errors';
 import {
@@ -30,7 +30,6 @@ import {
 } from '../entities/learning-material.entity';
 import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from '../entities/task.entity';
 
-type CourseServiceFacade = any;
 
 type CourseVersionSnapshotTask = {
   id?: string;
@@ -76,37 +75,7 @@ type CourseVersionSnapshotMaterial = {
   publishedAt?: string | null;
 };
 
-export class CourseRunVersionService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class CourseRunVersionService extends CourseDomainService {
 
   private normalizeCourseRunStatus(status: unknown): CourseRunStatus | undefined {
     if (status === undefined || status === null || status === '') {
@@ -368,7 +337,7 @@ export class CourseRunVersionService {
   }
 
   private async findCurrentCourseRun(courseId: string | number): Promise<CourseRun | null> {
-    return this.courseRunRepository.findOne({
+    return this.repositories.courseRuns.findOne({
       where: {
         courseId: this.toCourseId(courseId),
         isActive: true,
@@ -395,7 +364,7 @@ export class CourseRunVersionService {
     run.isActive = true;
     run.createdBy = actorId;
 
-    return this.courseRunRepository.save(run);
+    return this.repositories.courseRuns.save(run);
   }
 
   private async getCurrentCourseRunOrCreate(
@@ -438,7 +407,7 @@ export class CourseRunVersionService {
       courseId: course.id,
       courseRunId: courseRun.id,
       ...(courseVersion ? { courseVersionId: courseVersion.id } : {}),
-      publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+      publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
     };
     const taskWhere = {
       courseId: course.id,
@@ -446,14 +415,14 @@ export class CourseRunVersionService {
       ...(courseVersion ? { courseVersionId: courseVersion.id } : {}),
     };
     const [materials, taskReferences] = await Promise.all([
-      this.learningMaterialRepository.find({
+      this.repositories.learningMaterials.find({
         where: materialWhere,
         order: {
           sortOrder: 'ASC',
           createdAt: 'ASC',
         },
       }),
-      this.taskRepository.find({
+      this.repositories.tasks.find({
         where: taskWhere,
         order: {
           order: 'ASC',
@@ -544,7 +513,7 @@ export class CourseRunVersionService {
   }
 
   private async getNextCourseVersionNumber(courseRunId: string): Promise<number> {
-    const versions = await this.courseVersionRepository.find({
+    const versions = await this.repositories.courseVersions.find({
       where: {
         course_run_id: courseRunId,
       },
@@ -560,11 +529,11 @@ export class CourseRunVersionService {
     courseId: string,
     runId: string,
   ): Promise<CourseVersion | null> {
-    const versions = await this.courseVersionRepository.find({
+    const versions = await this.repositories.courseVersions.find({
       where: {
         course_id: courseId,
         course_run_id: runId,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
       order: {
         version_number: 'DESC',
@@ -581,19 +550,19 @@ export class CourseRunVersionService {
     versionId: string,
   ): Promise<void> {
     const [legacyMaterials, legacyTasks] = await Promise.all([
-      this.learningMaterialRepository.find({
+      this.repositories.learningMaterials.find({
         where: {
           courseId,
           courseRunId: runId,
-          courseVersionId: IsNull(),
-          publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+          courseVersionId: this.repositories.isNull(),
+          publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
         },
       }),
-      this.taskRepository.find({
+      this.repositories.tasks.find({
         where: {
           courseId,
           courseRunId: runId,
-          courseVersionId: IsNull(),
+          courseVersionId: this.repositories.isNull(),
         },
       }),
     ]);
@@ -607,10 +576,10 @@ export class CourseRunVersionService {
 
     await Promise.all([
       legacyMaterials.length > 0
-        ? this.learningMaterialRepository.save(legacyMaterials)
+        ? this.repositories.learningMaterials.save(legacyMaterials)
         : Promise.resolve([]),
       legacyTasks.length > 0
-        ? this.taskRepository.save(legacyTasks)
+        ? this.repositories.tasks.save(legacyTasks)
         : Promise.resolve([]),
     ]);
   }
@@ -633,7 +602,7 @@ export class CourseRunVersionService {
     }
 
     const course = await this.findCourseOrThrow(courseId);
-    const run = await this.courseRunRepository.findOne({
+    const run = await this.repositories.courseRuns.findOne({
       where: {
         id: runId,
         courseId,
@@ -654,7 +623,7 @@ export class CourseRunVersionService {
     await this.attachLegacyRunContentToVersion(course.id, run.id, createdVersion.id);
     await this.refreshCourseVersionContent(createdVersion.id);
 
-    const reloadedVersion = await this.courseVersionRepository.findOne({
+    const reloadedVersion = await this.repositories.courseVersions.findOne({
       where: {
         id: createdVersion.id,
       },
@@ -678,12 +647,12 @@ export class CourseRunVersionService {
     runId: string,
     versionId: string,
   ): Promise<CourseVersion> {
-    const version = await this.courseVersionRepository.findOne({
+    const version = await this.repositories.courseVersions.findOne({
       where: {
         id: versionId,
         course_id: courseId,
         course_run_id: runId,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
       relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
     });
@@ -700,7 +669,7 @@ export class CourseRunVersionService {
       return;
     }
 
-    const version = await this.courseVersionRepository.findOne({
+    const version = await this.repositories.courseVersions.findOne({
       where: { id: versionId },
       relations: ['courseRun'],
     });
@@ -710,7 +679,7 @@ export class CourseRunVersionService {
     }
 
     const course = await this.findCourseOrThrow(version.course_id);
-    const run = version.courseRun ?? await this.courseRunRepository.findOne({
+    const run = version.courseRun ?? await this.repositories.courseRuns.findOne({
       where: {
         id: version.course_run_id,
         courseId: version.course_id,
@@ -722,14 +691,14 @@ export class CourseRunVersionService {
     }
 
     version.content = await this.buildCourseVersionContent(course, run, version);
-    await this.courseVersionRepository.save(version);
+    await this.repositories.courseVersions.save(version);
   }
 
   private async findCourseVersionTemplateOrThrow(
     courseId: string,
     sourceVersionId: string,
   ): Promise<CourseVersion> {
-    const sourceVersion = await this.courseVersionRepository.findOne({
+    const sourceVersion = await this.repositories.courseVersions.findOne({
       where: {
         id: sourceVersionId,
       },
@@ -793,7 +762,7 @@ export class CourseRunVersionService {
       endDate?: string;
     },
   ): Promise<void> {
-    const existingRuns = await this.courseRunRepository.find({
+    const existingRuns = await this.repositories.courseRuns.find({
       where: {
         courseId,
       },
@@ -819,7 +788,7 @@ export class CourseRunVersionService {
     }
 
     if (!version.courseRun && version.course_run_id) {
-      version.courseRun = await this.courseRunRepository.findOne({
+      version.courseRun = await this.repositories.courseRuns.findOne({
         where: {
           id: version.course_run_id,
         },
@@ -827,7 +796,7 @@ export class CourseRunVersionService {
     }
 
     if (version.sourceVersionId && !version.sourceVersion) {
-      const sourceVersion = await this.courseVersionRepository.findOne({
+      const sourceVersion = await this.repositories.courseVersions.findOne({
         where: {
           id: version.sourceVersionId,
         },
@@ -837,7 +806,7 @@ export class CourseRunVersionService {
     }
 
     if (version.sourceVersion && !version.sourceVersion.courseRun && version.sourceVersion.course_run_id) {
-      version.sourceVersion.courseRun = await this.courseRunRepository.findOne({
+      version.sourceVersion.courseRun = await this.repositories.courseRuns.findOne({
         where: {
           id: version.sourceVersion.course_run_id,
         },
@@ -891,11 +860,11 @@ export class CourseRunVersionService {
     courseId: string,
     versionId: string,
   ): Promise<CourseVersion> {
-    const version = await this.courseVersionRepository.findOne({
+    const version = await this.repositories.courseVersions.findOne({
       where: {
         id: versionId,
         course_id: courseId,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
     });
 
@@ -903,7 +872,7 @@ export class CourseRunVersionService {
       throw new ApiNotFoundError('Course version not found', 'COURSE_NOT_FOUND');
     }
 
-    const versions = await this.courseVersionRepository.find({
+    const versions = await this.repositories.courseVersions.find({
       where: {
         course_id: courseId,
         course_run_id: version.course_run_id,
@@ -913,10 +882,10 @@ export class CourseRunVersionService {
     versions.forEach((candidate) => {
       candidate.is_active = false;
     });
-    await this.courseVersionRepository.save(versions);
+    await this.repositories.courseVersions.save(versions);
     version.is_active = true;
 
-    const savedVersion = await this.courseVersionRepository.save(version);
+    const savedVersion = await this.repositories.courseVersions.save(version);
     await this.refreshCourseVersionContent(savedVersion.id);
 
     return savedVersion;
@@ -928,33 +897,33 @@ export class CourseRunVersionService {
       run.id,
     );
     const [enrollments, materials, tasks, versions, results, assignments] = await Promise.all([
-      this.enrollmentRepository.find({ where: { courseRunId: run.id } }),
-      this.learningMaterialRepository.find({
+      this.repositories.enrollments.find({ where: { courseRunId: run.id } }),
+      this.repositories.learningMaterials.find({
         where: {
           courseRunId: run.id,
           courseVersionId: activeVersion.id,
-          publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+          publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
         },
       }),
-      this.taskRepository.find({
+      this.repositories.tasks.find({
         where: {
           courseRunId: run.id,
           courseVersionId: activeVersion.id,
         },
       }),
-      this.courseVersionRepository.find({
+      this.repositories.courseVersions.find({
         where: {
           course_run_id: run.id,
-          status: Not(CourseVersionStatus.ARCHIVED),
+          status: this.repositories.not(CourseVersionStatus.ARCHIVED),
         },
       }),
-      this.courseResultRepository.find({ where: { courseRunId: run.id } }),
-      this.assignmentRepository.find({ where: { courseRunId: run.id } }),
+      this.repositories.courseResults.find({ where: { courseRunId: run.id } }),
+      this.repositories.assignments.find({ where: { courseRunId: run.id } }),
     ]);
     const progressRecords = tasks.length > 0
-      ? await this.taskProgressRepository.find({
+      ? await this.repositories.taskProgress.find({
         where: {
-          taskId: In(tasks.map((task) => task.id)),
+          taskId: this.repositories.in(tasks.map((task) => task.id)),
         },
       })
       : [];
@@ -976,7 +945,7 @@ export class CourseRunVersionService {
     actorUserId?: string | number,
   ): Promise<CourseMemberRole | null> {
     const actorId = this.requireActorUserId(actorUserId);
-    const run = await this.courseRunRepository.findOne({
+    const run = await this.repositories.courseRuns.findOne({
       where: {
         id: runId,
         courseId,
@@ -1025,7 +994,7 @@ export class CourseRunVersionService {
       CoursePermission.ManageCourseContent,
     );
 
-    const run = await this.courseRunRepository.findOne({
+    const run = await this.repositories.courseRuns.findOne({
       where: {
         id: runId,
         courseId: normalizedCourseId,
@@ -1043,7 +1012,7 @@ export class CourseRunVersionService {
     courseId: string,
     runId: string,
   ): Promise<CourseRun> {
-    const run = await this.courseRunRepository.findOne({
+    const run = await this.repositories.courseRuns.findOne({
       where: {
         id: runId,
         courseId,
@@ -1054,7 +1023,7 @@ export class CourseRunVersionService {
       throw new ApiNotFoundError('Course run not found', 'COURSE_RUN_NOT_FOUND');
     }
 
-    const runs = await this.courseRunRepository.find({
+    const runs = await this.repositories.courseRuns.find({
       where: {
         courseId,
       },
@@ -1063,10 +1032,10 @@ export class CourseRunVersionService {
     runs.forEach((candidate) => {
       candidate.isActive = false;
     });
-    await this.courseRunRepository.save(runs);
+    await this.repositories.courseRuns.save(runs);
     run.isActive = true;
 
-    return this.courseRunRepository.save(run);
+    return this.repositories.courseRuns.save(run);
   }
 
   private async copyLearningMaterialsToRun(
@@ -1077,11 +1046,11 @@ export class CourseRunVersionService {
     targetVersion?: CourseVersion,
     sourceVersionId?: string,
   ): Promise<void> {
-    const materials = await this.learningMaterialRepository.find({
+    const materials = await this.repositories.learningMaterials.find({
       where: {
         courseRunId: sourceRunId,
         ...(sourceVersionId ? { courseVersionId: sourceVersionId } : {}),
-        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+        publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
       },
       order: {
         sortOrder: 'ASC',
@@ -1119,7 +1088,7 @@ export class CourseRunVersionService {
       material.isPublished = source.isPublished;
       material.createdBy = actorId;
       material.updatedBy = actorId;
-      await this.learningMaterialRepository.save(material);
+      await this.repositories.learningMaterials.save(material);
     }
   }
 
@@ -1130,7 +1099,7 @@ export class CourseRunVersionService {
     targetVersion?: CourseVersion,
     sourceVersionId?: string,
   ): Promise<Map<string, string>> {
-    const sourceTaskReferences = await this.taskRepository.find({
+    const sourceTaskReferences = await this.repositories.tasks.find({
       where: {
         courseRunId: sourceRunId,
         ...(sourceVersionId ? { courseVersionId: sourceVersionId } : {}),
@@ -1167,7 +1136,7 @@ export class CourseRunVersionService {
       task.createdBy = actorId;
       task.updatedBy = actorId;
       this.applyTaskServiceContent(task, taskServiceTask);
-      const savedTask = await this.taskRepository.save(task);
+      const savedTask = await this.repositories.tasks.save(task);
       taskIdMap.set(source.id, savedTask.id);
     }
 
@@ -1183,7 +1152,7 @@ export class CourseRunVersionService {
         continue;
       }
 
-      const copiedTask = await this.taskRepository.findOne({
+      const copiedTask = await this.repositories.tasks.findOne({
         where: {
           id: copiedTaskId,
         },
@@ -1192,7 +1161,7 @@ export class CourseRunVersionService {
       if (copiedTask) {
         copiedTask.prerequisiteTaskId = copiedPrerequisiteId;
         copiedTask.updatedBy = actorId;
-        await this.taskRepository.save(copiedTask);
+        await this.repositories.tasks.save(copiedTask);
       }
     }
 
@@ -1355,7 +1324,7 @@ export class CourseRunVersionService {
       task.createdBy = actorId;
       task.updatedBy = actorId;
       this.applyTaskServiceContent(task, taskServiceTask);
-      const savedTask = await this.taskRepository.save(task);
+      const savedTask = await this.repositories.tasks.save(task);
 
       if (source.id) {
         taskIdMap.set(source.id, savedTask.id);
@@ -1379,7 +1348,7 @@ export class CourseRunVersionService {
 
       copiedTask.prerequisiteTaskId = copiedPrerequisiteId;
       copiedTask.updatedBy = actorId;
-      await this.taskRepository.save(copiedTask);
+      await this.repositories.tasks.save(copiedTask);
     }
 
     return taskIdMap;
@@ -1461,7 +1430,7 @@ export class CourseRunVersionService {
       material.isPublished = source.isPublished === true;
       material.createdBy = actorId;
       material.updatedBy = actorId;
-      await this.learningMaterialRepository.save(material);
+      await this.repositories.learningMaterials.save(material);
     }
   }
 
@@ -1488,13 +1457,13 @@ export class CourseRunVersionService {
     }
 
     const [sourceMaterials, sourceTasks] = await Promise.all([
-      this.learningMaterialRepository.find({
+      this.repositories.learningMaterials.find({
         where: {
           courseVersionId: sourceVersion.id,
-          publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
+          publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
         },
       }),
-      this.taskRepository.find({
+      this.repositories.tasks.find({
         where: {
           courseVersionId: sourceVersion.id,
         },
@@ -1504,7 +1473,7 @@ export class CourseRunVersionService {
 
     if (!sourceHasSnapshot && (sourceMaterials.length > 0 || sourceTasks.length > 0)) {
       await this.refreshCourseVersionContent(sourceVersion.id);
-      copySource = await this.courseVersionRepository.findOne({
+      copySource = await this.repositories.courseVersions.findOne({
         where: {
           id: sourceVersion.id,
         },
@@ -1548,14 +1517,14 @@ export class CourseRunVersionService {
     version.created_by = actorId;
     version.is_active = true;
 
-    const savedVersion = await this.courseVersionRepository.save(version);
+    const savedVersion = await this.repositories.courseVersions.save(version);
     savedVersion.content = await this.buildCourseVersionContent(
       course,
       run,
       savedVersion,
     );
 
-    return this.courseVersionRepository.save(savedVersion);
+    return this.repositories.courseVersions.save(savedVersion);
   }
 
   async listCourseVersions(
@@ -1576,11 +1545,11 @@ export class CourseRunVersionService {
     await this.assertCourseRunManageable(courseId, runId, actorUserId);
     await this.getActiveCourseVersionForRunOrThrow(this.toCourseId(courseId), runId);
 
-    const versions = await this.courseVersionRepository.find({
+    const versions = await this.repositories.courseVersions.find({
       where: {
         course_id: this.toCourseId(courseId),
         course_run_id: runId,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
       order: {
         version_number: 'DESC',
@@ -1603,10 +1572,10 @@ export class CourseRunVersionService {
       CoursePermission.ManageCourseContent,
     );
 
-    const versions = await this.courseVersionRepository.find({
+    const versions = await this.repositories.courseVersions.find({
       where: {
         course_id: this.toCourseId(courseId),
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
       order: {
         version_number: 'DESC',
@@ -1637,11 +1606,11 @@ export class CourseRunVersionService {
   ): Promise<CourseVersionResponseDto> {
     await this.assertCourseVersionReadable(courseId, actorUserId);
 
-    const version = await this.courseVersionRepository.findOne({
+    const version = await this.repositories.courseVersions.findOne({
       where: {
         id: versionId,
         course_id: this.toCourseId(courseId),
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
       relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
     });
@@ -1685,11 +1654,11 @@ export class CourseRunVersionService {
 
     const course = await this.findCourseOrThrow(courseId);
     const run = await this.assertCourseRunManageable(courseId, runId, actorId);
-    const existingVersions = await this.courseVersionRepository.find({
+    const existingVersions = await this.repositories.courseVersions.find({
       where: {
         course_id: course.id,
         course_run_id: run.id,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
       order: {
         version_number: 'DESC',
@@ -1725,7 +1694,7 @@ export class CourseRunVersionService {
       existingVersions.forEach((version) => {
         version.is_active = false;
       });
-      await this.courseVersionRepository.save(existingVersions);
+      await this.repositories.courseVersions.save(existingVersions);
     }
 
     const version = new CourseVersion();
@@ -1744,7 +1713,7 @@ export class CourseRunVersionService {
     version.created_by = actorId;
     version.is_active = activate;
 
-    const savedVersion = await this.courseVersionRepository.save(version);
+    const savedVersion = await this.repositories.courseVersions.save(version);
 
     if (sourceVersion) {
       await this.copyCourseVersionContentToRun(
@@ -1790,7 +1759,7 @@ export class CourseRunVersionService {
     }
 
     return this.mapCourseVersionWithTemplateInfo(
-      await this.courseVersionRepository.findOne({
+      await this.repositories.courseVersions.findOne({
         where: { id: savedVersion.id },
         relations: ['courseRun', 'sourceVersion', 'sourceVersion.courseRun'],
       }) ?? savedVersion,
@@ -1866,12 +1835,12 @@ export class CourseRunVersionService {
       );
     }
 
-    const version = await this.courseVersionRepository.findOne({
+    const version = await this.repositories.courseVersions.findOne({
       where: {
         id: versionId,
         course_id: this.toCourseId(courseId),
         course_run_id: run.id,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
     });
 
@@ -1885,11 +1854,11 @@ export class CourseRunVersionService {
       );
     }
 
-    const versionsInRun = await this.courseVersionRepository.find({
+    const versionsInRun = await this.repositories.courseVersions.find({
       where: {
         course_id: this.toCourseId(courseId),
         course_run_id: run.id,
-        status: Not(CourseVersionStatus.ARCHIVED),
+        status: this.repositories.not(CourseVersionStatus.ARCHIVED),
       },
     });
 
@@ -1899,7 +1868,7 @@ export class CourseRunVersionService {
       );
     }
 
-    const referencingVersions = await this.courseVersionRepository.find({
+    const referencingVersions = await this.repositories.courseVersions.find({
       where: {
         sourceVersionId: version.id,
       },
@@ -1911,7 +1880,7 @@ export class CourseRunVersionService {
       );
     }
 
-    const versionTasks = await this.taskRepository.find({
+    const versionTasks = await this.repositories.tasks.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: run.id,
@@ -1920,9 +1889,9 @@ export class CourseRunVersionService {
     });
 
     if (versionTasks.length > 0) {
-      const progressCount = await this.taskProgressRepository.count({
+      const progressCount = await this.repositories.taskProgress.count({
         where: {
-          taskId: In(versionTasks.map((task) => task.id)),
+          taskId: this.repositories.in(versionTasks.map((task) => task.id)),
         },
       });
 
@@ -1933,7 +1902,7 @@ export class CourseRunVersionService {
       }
     }
 
-    await this.courseVersionRepository.delete(version.id);
+    await this.repositories.courseVersions.delete(version.id);
     await this.recordAuditEvent({
       eventType: AuditEventType.CONTENT_VERSION_DELETED,
       actorUserId: actorId,
@@ -1959,7 +1928,7 @@ export class CourseRunVersionService {
       actorId,
       CoursePermission.ManageCourseContent,
     );
-    const runs = await this.courseRunRepository.find({
+    const runs = await this.repositories.courseRuns.find({
       where: {
         courseId: this.toCourseId(courseId),
       },
@@ -1988,7 +1957,7 @@ export class CourseRunVersionService {
     actorUserId?: string | number,
   ): Promise<CourseRunResponseDto> {
     await this.assertCourseRunReadable(this.toCourseId(courseId), runId, actorUserId);
-    const run = await this.courseRunRepository.findOne({
+    const run = await this.repositories.courseRuns.findOne({
       where: {
         id: runId,
         courseId: this.toCourseId(courseId),
@@ -2070,7 +2039,7 @@ export class CourseRunVersionService {
     }
 
     course.contentTemplateStrategy = strategy;
-    await this.coursesRepository.save(course);
+    await this.repositories.courses.save(course);
 
     return this.getCourseRunPlan(course.id, actorId);
   }
@@ -2100,7 +2069,7 @@ export class CourseRunVersionService {
     run.isActive = false;
     run.createdBy = actorId;
 
-    const savedRun = await this.courseRunRepository.save(run);
+    const savedRun = await this.repositories.courseRuns.save(run);
     const targetVersion = await this.createInitialContentVersionForRun(
       course,
       savedRun,
@@ -2166,7 +2135,7 @@ export class CourseRunVersionService {
       });
     }
 
-    const reloadedRun = await this.courseRunRepository.findOne({
+    const reloadedRun = await this.repositories.courseRuns.findOne({
       where: {
         id: savedRun.id,
       },
@@ -2285,7 +2254,7 @@ export class CourseRunVersionService {
       CoursePermission.ManageCourse,
     );
     const normalizedCourseId = this.toCourseId(courseId);
-    const run = await this.courseRunRepository.findOne({
+    const run = await this.repositories.courseRuns.findOne({
       where: {
         id: runId,
         courseId: normalizedCourseId,
@@ -2302,7 +2271,7 @@ export class CourseRunVersionService {
       );
     }
 
-    const allRuns = await this.courseRunRepository.find({
+    const allRuns = await this.repositories.courseRuns.find({
       where: {
         courseId: normalizedCourseId,
       },
@@ -2313,16 +2282,16 @@ export class CourseRunVersionService {
     }
 
     const [enrollments, tasks, materials, assignments, results] = await Promise.all([
-      this.enrollmentRepository.find({ where: { courseRunId: run.id } }),
-      this.taskRepository.find({ where: { courseRunId: run.id } }),
-      this.learningMaterialRepository.find({ where: { courseRunId: run.id } }),
-      this.assignmentRepository.find({ where: { courseRunId: run.id } }),
-      this.courseResultRepository.find({ where: { courseRunId: run.id } }),
+      this.repositories.enrollments.find({ where: { courseRunId: run.id } }),
+      this.repositories.tasks.find({ where: { courseRunId: run.id } }),
+      this.repositories.learningMaterials.find({ where: { courseRunId: run.id } }),
+      this.repositories.assignments.find({ where: { courseRunId: run.id } }),
+      this.repositories.courseResults.find({ where: { courseRunId: run.id } }),
     ]);
     const progressRecords = tasks.length > 0
-      ? await this.taskProgressRepository.find({
+      ? await this.repositories.taskProgress.find({
         where: {
-          taskId: In(tasks.map((task) => task.id)),
+          taskId: this.repositories.in(tasks.map((task) => task.id)),
         },
       })
       : [];
@@ -2335,7 +2304,7 @@ export class CourseRunVersionService {
     if (mustArchive) {
       run.status = CourseRunStatus.ARCHIVED;
       run.isActive = false;
-      const archivedRun = await this.courseRunRepository.save(run);
+      const archivedRun = await this.repositories.courseRuns.save(run);
 
       return {
         action: 'ARCHIVED',
@@ -2345,7 +2314,7 @@ export class CourseRunVersionService {
     }
 
     await this.deleteUnreferencedMaterialFilesForRun(run, materials);
-    await this.courseRunRepository.delete(run.id);
+    await this.repositories.courseRuns.delete(run.id);
 
     return {
       action: 'DELETED',
@@ -2364,7 +2333,7 @@ export class CourseRunVersionService {
     );
 
     for (const storageKey of storageKeys) {
-      const references = await this.learningMaterialRepository.find({
+      const references = await this.repositories.learningMaterials.find({
         where: {
           courseId: run.courseId,
           storageKey,

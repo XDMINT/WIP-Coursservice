@@ -1,54 +1,23 @@
-import { ILike, Not } from 'typeorm';
+import { CourseDomainService } from './course-domain.service';
 import { Assignment } from '../entities/assignment.entity';
 import { ContentTemplate } from '../entities/content-template.entity';
 import { Course } from '../entities/course.entity';
 import { LearningMaterial, LearningMaterialPublicationStatus } from '../entities/learning-material.entity';
 import { Task } from '../entities/task.entity';
 
-type CourseServiceFacade = any;
 
-export class CourseSearchService {
-  [key: string]: any;
-
-  readonly api: any;
-
-  constructor(private readonly courseService: CourseServiceFacade) {
-    this.api = new Proxy(this, {
-      get: (target, property, receiver) => {
-        if (property in target) {
-          const value = Reflect.get(target, property, receiver);
-
-          return typeof value === 'function' ? (value as Function).bind(receiver) : value;
-        }
-
-        const value = target.courseService?.[property as keyof CourseServiceFacade];
-
-        return typeof value === 'function'
-          ? (value as Function).bind(target.courseService)
-          : value;
-      },
-      set: (target, property, value, receiver) => {
-        if (property in target) {
-          return Reflect.set(target, property, value, receiver);
-        }
-
-        target.courseService[property as keyof CourseServiceFacade] = value;
-
-        return true;
-      },
-    });
-  }
+export class CourseSearchService extends CourseDomainService {
 
   async searchCourses(
     query: string,
     limit: number = 10,
     offset: number = 0,
   ): Promise<Course[]> {
-    return this.coursesRepository.find({
+    return this.repositories.courses.find({
       where: [
-        { title: ILike(`%${query}%`) },
-        { description: ILike(`%${query}%`) },
-        { external_id: ILike(`%${query}%`) },
+        { title: this.repositories.ilike(`%${query}%`) },
+        { description: this.repositories.ilike(`%${query}%`) },
+        { external_id: this.repositories.ilike(`%${query}%`) },
       ],
       take: limit,
       skip: offset,
@@ -64,13 +33,13 @@ export class CourseSearchService {
     const { run, version } =
       await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
 
-    return this.learningMaterialRepository.find({
+    return this.repositories.learningMaterials.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: run.id,
         courseVersionId: version.id,
-        publicationStatus: Not(LearningMaterialPublicationStatus.ARCHIVED),
-        title: ILike(`%${query}%`),
+        publicationStatus: this.repositories.not(LearningMaterialPublicationStatus.ARCHIVED),
+        title: this.repositories.ilike(`%${query}%`),
       },
       take: limit,
       skip: offset,
@@ -83,10 +52,10 @@ export class CourseSearchService {
     limit: number = 10,
     offset: number = 0,
   ): Promise<Assignment[]> {
-    return this.assignmentRepository.find({
+    return this.repositories.assignments.find({
       where: {
         course: { id: courseId },
-        title: ILike(`%${query}%`),
+        title: this.repositories.ilike(`%${query}%`),
       },
       take: limit,
       skip: offset,
@@ -102,12 +71,12 @@ export class CourseSearchService {
     const { run, version } =
       await this.getActiveCourseVersionForCurrentRunOrThrow(this.toCourseId(courseId));
 
-    return this.taskRepository.find({
+    return this.repositories.tasks.find({
       where: {
         courseId: this.toCourseId(courseId),
         courseRunId: run.id,
         courseVersionId: version.id,
-        title: ILike(`%${query}%`),
+        title: this.repositories.ilike(`%${query}%`),
       },
       take: limit,
       skip: offset,
@@ -119,10 +88,10 @@ export class CourseSearchService {
     limit: number = 10,
     offset: number = 0,
   ): Promise<ContentTemplate[]> {
-    return this.contentTemplateRepository.find({
+    return this.repositories.contentTemplates.find({
       where: [
-        { name: ILike(`%${query}%`) },
-        { description: ILike(`%${query}%`) },
+        { name: this.repositories.ilike(`%${query}%`) },
+        { description: this.repositories.ilike(`%${query}%`) },
       ],
       take: limit,
       skip: offset,
@@ -149,9 +118,9 @@ export class CourseSearchService {
 
     if (contentTypes.includes('LEARNING_MATERIAL')) {
       // Search across all courses for learning materials
-      results.learningMaterials = await this.learningMaterialRepository.find({
+      results.learningMaterials = await this.repositories.learningMaterials.find({
         where: {
-          title: ILike(`%${query}%`),
+          title: this.repositories.ilike(`%${query}%`),
         },
         take: limit,
         skip: offset,
@@ -161,9 +130,9 @@ export class CourseSearchService {
 
     if (contentTypes.includes('ASSIGNMENT')) {
       // Search across all courses for assignments
-      results.assignments = await this.assignmentRepository.find({
+      results.assignments = await this.repositories.assignments.find({
         where: {
-          title: ILike(`%${query}%`),
+          title: this.repositories.ilike(`%${query}%`),
         },
         take: limit,
         skip: offset,
@@ -173,9 +142,9 @@ export class CourseSearchService {
 
     if (contentTypes.includes('TASK')) {
       // Search across all courses for tasks
-      results.tasks = await this.taskRepository.find({
+      results.tasks = await this.repositories.tasks.find({
         where: {
-          title: ILike(`%${query}%`),
+          title: this.repositories.ilike(`%${query}%`),
         },
         take: limit,
         skip: offset,
