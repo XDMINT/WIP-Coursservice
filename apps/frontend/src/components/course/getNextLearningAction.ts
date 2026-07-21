@@ -51,6 +51,18 @@ const findMaterialForTask = (
   materials.find((material) => material.releaseAfterTaskId === task.id && !material.locked) ??
   materials.find((material) => !material.releaseAfterTaskId && !material.locked)
 
+const dependencyIdsForTask = (task: StudentLearningTask) => {
+  const dependencyIds = (task.dependencies ?? [])
+    .map((dependency) => dependency.prerequisiteTaskId)
+    .filter(Boolean)
+
+  if (dependencyIds.length === 0 && task.prerequisiteTaskId) {
+    dependencyIds.push(task.prerequisiteTaskId)
+  }
+
+  return dependencyIds
+}
+
 const lockReasonForTask = (
   task: StudentLearningTask,
   tasks: StudentLearningTask[]
@@ -59,9 +71,9 @@ const lockReasonForTask = (
     return task.lockedReason
   }
 
-  const prerequisite = task.prerequisiteTaskId
-    ? tasks.find((candidate) => candidate.id === task.prerequisiteTaskId)
-    : undefined
+  const prerequisite = dependencyIdsForTask(task)
+    .map((dependencyId) => tasks.find((candidate) => candidate.id === dependencyId))
+    .find(Boolean)
 
   return prerequisite
     ? `Schließe zuerst „${prerequisite.title}“ ab, um diesen Schritt freizuschalten.`
@@ -171,7 +183,7 @@ export const getLearningStepReflection = (
 ): LearningStepReflection | null => {
   const orderedTasks = sortedTasks(tasks)
   const nextUnlockedTask = orderedTasks.find((candidate) =>
-    candidate.prerequisiteTaskId === task.id &&
+    dependencyIdsForTask(candidate).includes(task.id) &&
     !isLocked(candidate) &&
     [TaskProgressStatus.AVAILABLE, TaskProgressStatus.IN_PROGRESS].includes(candidate.status)
   )

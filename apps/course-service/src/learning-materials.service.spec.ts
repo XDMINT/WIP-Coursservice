@@ -17,10 +17,10 @@ import { LocalMaterialStorage } from './storage/material-storage';
 import { CourseRepositories } from './persistence/course-repositories';
 
 const emptyRepository = () => ({
-  delete: jest.fn(),
-  find: jest.fn(),
-  findOne: jest.fn(),
-  save: jest.fn(),
+  delete: jest.fn().mockResolvedValue({ affected: 0 }),
+  find: jest.fn().mockResolvedValue([]),
+  findOne: jest.fn().mockResolvedValue(null),
+  save: jest.fn((entity) => Promise.resolve(entity)),
 });
 
 const createEnrollment = (
@@ -263,6 +263,7 @@ const createService = (options: {
       grades: emptyRepository() as any,
       groupMemberships: emptyRepository() as any,
       learningMaterials: materialRepository as any,
+      taskDependencies: emptyRepository() as any,
       taskAssessments: emptyRepository() as any,
       taskProgress: taskProgressRepository as any,
       tasks: taskRepository as any,

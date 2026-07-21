@@ -15,7 +15,27 @@ import {
 } from './entities/learning-material.entity';
 import { CourseGroup } from './entities/course-group.entity';
 import { GroupMembership } from './entities/group-membership.entity';
-import { Task, TaskGradingMode, TaskUnlockMode } from './entities/task.entity';
+import { GroupTaskProgress } from './entities/group-task-progress.entity';
+import {
+  Task,
+  TaskGradingMode,
+  TaskLearningPathType,
+  TaskUnlockMode,
+} from './entities/task.entity';
+import {
+  TaskDependency,
+  TaskDependencyCondition,
+} from './entities/task-dependency.entity';
+import { TaskAssessment, TaskAssessmentStatus } from './entities/task-assessment.entity';
+import {
+  TaskProgress,
+  TaskProgressStatus,
+} from './entities/task-progress.entity';
+import {
+  CoursePassStatus,
+  CourseResult,
+  CourseResultSource,
+} from './entities/course-result.entity';
 
 const matchesWhere = (item: any, where: Record<string, any> = {}) =>
   Object.entries(where).every(([key, expected]) => item[key] === expected);
@@ -55,6 +75,20 @@ const createRepository = <T extends Record<string, any>>(
     find: jest.fn(({ where } = {}) =>
       Promise.resolve(items.filter((item) => matchesWhere(item, where))),
     ),
+    delete: jest.fn((idOrWhere: string | Record<string, any>) => {
+      const before = items.length;
+      const shouldDelete = (item: T) =>
+        typeof idOrWhere === 'string'
+          ? (item as any).id === idOrWhere
+          : matchesWhere(item, idOrWhere);
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (shouldDelete(items[index])) {
+          items.splice(index, 1);
+        }
+      }
+
+      return Promise.resolve({ affected: before - items.length });
+    }),
     save: jest.fn((entityOrEntities: T | T[]) =>
       Promise.resolve(
         Array.isArray(entityOrEntities)
@@ -114,6 +148,11 @@ describe('CourseDemoSeedService', () => {
     const enrollmentRepository = createRepository<Enrollment>([enrollment], 'enrollment');
     const learningMaterialRepository = createRepository<LearningMaterial>([], 'material');
     const taskRepository = createRepository<Task>([task], 'task');
+    const taskDependencyRepository = createRepository<TaskDependency>([], 'dependency');
+    const taskAssessmentRepository = createRepository<TaskAssessment>([], 'assessment');
+    const taskProgressRepository = createRepository<TaskProgress>([], 'progress');
+    const groupTaskProgressRepository = createRepository<GroupTaskProgress>([], 'group-progress');
+    const courseResultRepository = createRepository<CourseResult>([], 'result');
     const courseGroupRepository = createRepository<CourseGroup>([], 'group');
     const groupMembershipRepository = createRepository<GroupMembership>([], 'group-membership');
     const courseVersionRepository = createRepository<CourseVersion>(
@@ -133,6 +172,12 @@ describe('CourseDemoSeedService', () => {
       ],
       'version',
     );
+    const materialStorage = {
+      saveFile: jest.fn(async (_courseId: string, originalFileName: string) => ({
+        safeFileName: originalFileName.replace(/\s+/g, '_'),
+        storageKey: `stored-${originalFileName.replace(/\s+/g, '_')}`,
+      })),
+    };
     const service = new CourseDemoSeedService(
       {
         get: jest.fn((key: string) => (key === 'APP_ENV' ? 'development' : undefined)),
@@ -142,9 +187,15 @@ describe('CourseDemoSeedService', () => {
       enrollmentRepository as any,
       learningMaterialRepository as any,
       taskRepository as any,
+      taskDependencyRepository as any,
+      taskAssessmentRepository as any,
+      taskProgressRepository as any,
+      groupTaskProgressRepository as any,
+      courseResultRepository as any,
       courseVersionRepository as any,
       courseGroupRepository as any,
       groupMembershipRepository as any,
+      materialStorage as any,
     );
 
     await service.onApplicationBootstrap();
@@ -307,6 +358,123 @@ describe('CourseDemoSeedService', () => {
         expect.objectContaining({
           demoKey: 'learning-process-final-task',
           gradingMode: TaskGradingMode.AUTOMATIC_MOCK,
+        }),
+      ]),
+    });
+    const webCourse = courseRepository.items.find(
+      (item) => item.external_id === 'demo-webtechnologien',
+    );
+    expect(webCourse).toMatchObject({
+      title: 'Webtechnologien',
+      status: CourseStatus.PUBLISHED,
+      recurrenceType: CourseRecurrenceType.SEMESTER,
+    });
+    const activeWebRun = courseRunRepository.items.find(
+      (item) => item.courseId === webCourse?.id && item.isActive,
+    );
+    expect(activeWebRun).toMatchObject({
+      label: 'Wintersemester 2026/27',
+      status: CourseRunStatus.PUBLISHED,
+    });
+    const activeWebVersion = courseVersionRepository.items.find(
+      (item) => item.course_id === webCourse?.id && item.version_number === 2,
+    );
+    expect(activeWebVersion).toMatchObject({
+      is_active: true,
+      change_summary: 'Lernpfade, Gruppenprojekt, Materialien und Bewertungen ergänzt',
+    });
+    const remedialTask = taskRepository.items.find(
+      (item) =>
+        item.courseId === webCourse?.id &&
+        item.courseRunId === activeWebRun?.id &&
+        item.demoKey === 'webtech-remedial-html-css',
+    );
+    const htmlCssTask = taskRepository.items.find(
+      (item) =>
+        item.courseId === webCourse?.id &&
+        item.courseRunId === activeWebRun?.id &&
+        item.demoKey === 'webtech-html-css-page',
+    );
+    expect(remedialTask).toMatchObject({
+      courseVersionId: activeWebVersion?.id,
+      learningPathType: TaskLearningPathType.REMEDIAL,
+      unlockMode: TaskUnlockMode.AUTOMATIC,
+    });
+    expect(taskDependencyRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: remedialTask?.id,
+          prerequisiteTaskId: htmlCssTask?.id,
+          condition: TaskDependencyCondition.FAILED,
+        }),
+      ]),
+    );
+    expect(learningMaterialRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          courseId: webCourse?.id,
+          courseRunId: activeWebRun?.id,
+          courseVersionId: activeWebVersion?.id,
+          title: 'Syllabus Webtechnologien',
+          storageKey: expect.stringContaining('webtechnologien-syllabus.pdf'),
+        }),
+        expect.objectContaining({
+          courseId: webCourse?.id,
+          title: 'MDN Web Docs: Einstieg in Webtechnologien',
+          url: 'https://developer.mozilla.org/de/docs/Learn',
+        }),
+      ]),
+    );
+    expect(materialStorage.saveFile).toHaveBeenCalled();
+    expect(taskAssessmentRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: htmlCssTask?.id,
+          studentId: '3',
+          status: TaskAssessmentStatus.FAILED,
+          passed: false,
+        }),
+      ]),
+    );
+    expect(taskProgressRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: remedialTask?.id,
+          status: TaskProgressStatus.AVAILABLE,
+        }),
+      ]),
+    );
+    expect(courseResultRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          courseId: webCourse?.id,
+          studentId: '3',
+          passStatus: CoursePassStatus.FAILED,
+          source: CourseResultSource.MANUAL_OVERRIDE,
+        }),
+        expect.objectContaining({
+          courseId: webCourse?.id,
+          studentId: '4',
+          passStatus: CoursePassStatus.PASSED,
+          source: CourseResultSource.AUTOMATIC_CALCULATION,
+        }),
+      ]),
+    );
+    expect(activeWebVersion?.content).toMatchObject({
+      learningMaterials: expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Syllabus Webtechnologien',
+        }),
+      ]),
+      tasks: expect.arrayContaining([
+        expect.objectContaining({
+          demoKey: 'webtech-remedial-html-css',
+          dependencies: expect.arrayContaining([
+            expect.objectContaining({
+              condition: TaskDependencyCondition.FAILED,
+            }),
+          ]),
+          learningPathType: TaskLearningPathType.REMEDIAL,
         }),
       ]),
     });

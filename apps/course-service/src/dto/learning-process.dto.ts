@@ -1,9 +1,20 @@
-import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from '../entities/task.entity';
+import {
+  Task,
+  TaskGradingMode,
+  TaskLearningPathType,
+  TaskUnlockMode,
+  TaskWorkMode,
+} from '../entities/task.entity';
 import {
   TaskAssessment,
   TaskAssessmentStatus,
   TaskAssessmentTargetType,
 } from '../entities/task-assessment.entity';
+import {
+  TaskDependency,
+  TaskDependencyCondition,
+  TaskDependencyOperator,
+} from '../entities/task-dependency.entity';
 import {
   TaskProgress,
   TaskProgressStatus,
@@ -23,9 +34,12 @@ export type LearningTaskResponseDto = {
   order: number;
   unlockMode: TaskUnlockMode;
   prerequisiteTaskId?: string;
+  dependencyOperator?: TaskDependencyOperator;
+  dependencies?: LearningTaskDependencyDto[];
   completionCriteria?: Record<string, unknown>;
   gradingMode: TaskGradingMode;
   workMode: TaskWorkMode;
+  learningPathType: TaskLearningPathType;
   maxPoints?: number | null;
   passThreshold?: number | null;
   feedbackRequired: boolean;
@@ -36,6 +50,13 @@ export type LearningTaskResponseDto = {
   updatedBy: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type LearningTaskDependencyDto = {
+  id?: string;
+  prerequisiteTaskId: string;
+  condition: TaskDependencyCondition;
+  operator: TaskDependencyOperator;
 };
 
 export type StudentLearningTaskResponseDto = LearningTaskResponseDto & {
@@ -112,9 +133,15 @@ export type CreateLearningTaskDto = {
   order?: number | string;
   unlockMode?: TaskUnlockMode | string;
   prerequisiteTaskId?: string | null;
+  dependencyOperator?: TaskDependencyOperator | string;
+  dependencies?: Array<{
+    prerequisiteTaskId?: string | null;
+    condition?: TaskDependencyCondition | string;
+  }>;
   completionCriteria?: Record<string, unknown> | null;
   gradingMode?: TaskGradingMode | string;
   workMode?: TaskWorkMode | string;
+  learningPathType?: TaskLearningPathType | string;
   maxPoints?: number | string | null;
   passThreshold?: number | string | null;
   feedbackRequired?: boolean;
@@ -134,6 +161,8 @@ export type UpdateLearningTaskSortDto = {
 export type UpdateLearningTaskReleaseConfigDto = {
   unlockMode?: TaskUnlockMode | string;
   prerequisiteTaskId?: string | null;
+  dependencyOperator?: TaskDependencyOperator | string;
+  dependencies?: CreateLearningTaskDto['dependencies'];
 };
 
 export type ManualUnlockLearningTaskDto = {
@@ -182,6 +211,15 @@ export type TaskAssessmentResponseDto = {
 const toIsoString = (value?: Date): string | undefined =>
   value instanceof Date ? value.toISOString() : undefined;
 
+export const mapTaskDependencyToDto = (
+  dependency: TaskDependency,
+): LearningTaskDependencyDto => ({
+  id: dependency.id,
+  prerequisiteTaskId: dependency.prerequisiteTaskId,
+  condition: dependency.condition,
+  operator: dependency.operator,
+});
+
 export const mapLearningTaskToDto = (task: Task): LearningTaskResponseDto => ({
   id: task.id,
   externalTaskId: task.externalTaskId,
@@ -195,9 +233,12 @@ export const mapLearningTaskToDto = (task: Task): LearningTaskResponseDto => ({
   order: task.order,
   unlockMode: task.unlockMode,
   prerequisiteTaskId: task.prerequisiteTaskId,
+  dependencyOperator: task.dependencies?.[0]?.operator,
+  dependencies: task.dependencies?.map(mapTaskDependencyToDto) ?? [],
   completionCriteria: task.completionCriteria,
   gradingMode: task.gradingMode ?? TaskGradingMode.NOT_GRADED,
   workMode: task.workMode ?? TaskWorkMode.INDIVIDUAL,
+  learningPathType: task.learningPathType ?? TaskLearningPathType.STANDARD,
   maxPoints: task.maxPoints === undefined || task.maxPoints === null
     ? null
     : Number(task.maxPoints),

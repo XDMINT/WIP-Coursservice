@@ -7,6 +7,7 @@ import { ApiForbiddenError, ApiNotFoundError, ApiValidationError } from '../comm
 import {
   CreateLearningTaskDto,
   LearningPathResponseDto,
+  LearningTaskDependencyDto,
   LearningTaskProgressDto,
   LearningTaskResponseDto,
   ManualTaskAssessmentDto,
@@ -39,12 +40,23 @@ import { CourseGroup } from '../entities/course-group.entity';
 import { CourseMemberRole, Enrollment } from '../entities/enrollment.entity';
 import { GroupMembership, MembershipRole } from '../entities/group-membership.entity';
 import { GroupTaskProgress } from '../entities/group-task-progress.entity';
-import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from '../entities/task.entity';
+import {
+  Task,
+  TaskGradingMode,
+  TaskLearningPathType,
+  TaskUnlockMode,
+  TaskWorkMode,
+} from '../entities/task.entity';
 import {
   TaskAssessment,
   TaskAssessmentStatus,
   TaskAssessmentTargetType,
 } from '../entities/task-assessment.entity';
+import {
+  TaskDependency,
+  TaskDependencyCondition,
+  TaskDependencyOperator,
+} from '../entities/task-dependency.entity';
 import {
   TaskProgress,
   TaskProgressStatus,
@@ -333,6 +345,23 @@ export class LearningTaskService extends CourseDomainService {
     return normalizedMode;
   }
 
+  private normalizeTaskLearningPathType(
+    learningPathType: unknown,
+    defaultType = TaskLearningPathType.STANDARD,
+  ): TaskLearningPathType {
+    if (learningPathType === undefined || learningPathType === null || learningPathType === '') {
+      return defaultType;
+    }
+
+    const normalizedType = String(learningPathType).toUpperCase() as TaskLearningPathType;
+
+    if (!Object.values(TaskLearningPathType).includes(normalizedType)) {
+      throw new ApiValidationError('Invalid task learning path type');
+    }
+
+    return normalizedType;
+  }
+
   private parseTaskAssessmentNumber(
     value: unknown,
     fieldName: string,
@@ -425,6 +454,166 @@ export class LearningTaskService extends CourseDomainService {
     return String(prerequisiteTaskId);
   }
 
+  private normalizeTaskDependencyOperator(
+    operator: unknown,
+    defaultOperator = TaskDependencyOperator.ALL_OF,
+  ): TaskDependencyOperator {
+    if (operator === undefined || operator === null || operator === '') {
+      return defaultOperator;
+    }
+
+    const normalizedOperator = String(operator).toUpperCase() as TaskDependencyOperator;
+
+    if (!Object.values(TaskDependencyOperator).includes(normalizedOperator)) {
+      throw new ApiValidationError('Invalid task dependency operator');
+    }
+
+    return normalizedOperator;
+  }
+
+  private normalizeTaskDependencyCondition(
+    condition: unknown,
+    defaultCondition = TaskDependencyCondition.PASSED,
+  ): TaskDependencyCondition {
+    if (condition === undefined || condition === null || condition === '') {
+      return defaultCondition;
+    }
+
+    const normalizedCondition = String(condition).toUpperCase() as TaskDependencyCondition;
+
+    if (!Object.values(TaskDependencyCondition).includes(normalizedCondition)) {
+      throw new ApiValidationError('Invalid task dependency condition');
+    }
+
+    return normalizedCondition;
+  }
+
+  private normalizeTaskDependencies(
+    body: Pick<CreateLearningTaskDto, 'dependencies' | 'dependencyOperator' | 'prerequisiteTaskId'>,
+    fallbackDependencies: LearningTaskDependencyDto[] = [],
+  ): {
+    dependencyOperator: TaskDependencyOperator;
+    dependencies: LearningTaskDependencyDto[];
+    prerequisiteTaskId?: string;
+  } {
+    const fallbackOperator = fallbackDependencies[0]?.operator ?? TaskDependencyOperator.ALL_OF;
+    const dependencyOperator = this.normalizeTaskDependencyOperator(
+      body.dependencyOperator,
+      fallbackOperator,
+    );
+    const dependenciesProvided = Object.prototype.hasOwnProperty.call(body, 'dependencies');
+    const prerequisiteProvided = Object.prototype.hasOwnProperty.call(body, 'prerequisiteTaskId');
+    const rawDependencies = dependenciesProvided
+      ? body.dependencies ?? []
+      : prerequisiteProvided
+        ? []
+        : fallbackDependencies;
+    const dependencies = rawDependencies
+      .map((dependency) => ({
+        prerequisiteTaskId: this.normalizeTaskPrerequisite(dependency?.prerequisiteTaskId),
+        condition: this.normalizeTaskDependencyCondition(dependency?.condition),
+      }))
+      .filter((dependency): dependency is {
+        prerequisiteTaskId: string;
+        condition: TaskDependencyCondition;
+      } => Boolean(dependency.prerequisiteTaskId))
+      .map((dependency) => ({
+        prerequisiteTaskId: dependency.prerequisiteTaskId,
+        condition: dependency.condition,
+        operator: dependencyOperator,
+      }));
+    const legacyPrerequisite = this.normalizeTaskPrerequisite(body.prerequisiteTaskId);
+
+    if (
+      legacyPrerequisite &&
+      !dependencies.some((dependency) => dependency.prerequisiteTaskId === legacyPrerequisite)
+    ) {
+      dependencies.unshift({
+        prerequisiteTaskId: legacyPrerequisite,
+        condition: TaskDependencyCondition.PASSED,
+        operator: dependencyOperator,
+      });
+    }
+
+    return {
+      dependencyOperator,
+      dependencies,
+      prerequisiteTaskId: dependencies[0]?.prerequisiteTaskId,
+    };
+  }
+
+  private async loadTaskDependencies(taskId: string): Promise<TaskDependency[]> {
+    return this.repositories.taskDependencies.find({
+      where: { taskId },
+      relations: ['prerequisiteTask'],
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  private assignDependenciesToTask<T extends Task>(
+    task: T,
+    dependencies: TaskDependency[],
+  ): T {
+    task.dependencies = dependencies;
+
+    return task;
+  }
+
+  private async enrichTaskDependencies<T extends Task>(tasks: T[]): Promise<T[]> {
+    if (tasks.length === 0) {
+      return tasks;
+    }
+
+    const dependencies = await this.repositories.taskDependencies.find({
+      where: {
+        taskId: this.repositories.in(tasks.map((task) => task.id)),
+      },
+      relations: ['prerequisiteTask'],
+      order: { createdAt: 'ASC' },
+    });
+    const dependenciesByTaskId = new Map<string, TaskDependency[]>();
+
+    for (const dependency of dependencies) {
+      const taskDependencies = dependenciesByTaskId.get(dependency.taskId) ?? [];
+      taskDependencies.push(dependency);
+      dependenciesByTaskId.set(dependency.taskId, taskDependencies);
+    }
+
+    return tasks.map((task) =>
+      this.assignDependenciesToTask(task, dependenciesByTaskId.get(task.id) ?? []),
+    );
+  }
+
+  private async syncTaskDependencies(
+    task: Task,
+    dependencies: LearningTaskDependencyDto[],
+    actorId: string,
+  ): Promise<TaskDependency[]> {
+    const existingDependencies = await this.loadTaskDependencies(task.id);
+
+    for (const existingDependency of existingDependencies) {
+      await this.repositories.taskDependencies.delete(existingDependency.id);
+    }
+
+    const savedDependencies: TaskDependency[] = [];
+
+    for (const dependencyInput of dependencies) {
+      const dependency = new TaskDependency();
+      dependency.taskId = task.id;
+      dependency.task = task;
+      dependency.prerequisiteTaskId = dependencyInput.prerequisiteTaskId;
+      dependency.condition = dependencyInput.condition;
+      dependency.operator = dependencyInput.operator;
+      dependency.createdBy = actorId;
+      dependency.updatedBy = actorId;
+      savedDependencies.push(await this.repositories.taskDependencies.save(dependency));
+    }
+
+    task.dependencies = savedDependencies;
+
+    return savedDependencies;
+  }
+
   private async findLearningTaskOrThrow(taskId: string): Promise<Task> {
     const task = await this.repositories.tasks.findOne({
       where: { id: taskId },
@@ -434,7 +623,12 @@ export class LearningTaskService extends CourseDomainService {
       throw new ApiNotFoundError('Task not found', 'TASK_NOT_FOUND');
     }
 
-    return this.enrichTaskReference(task);
+    const enrichedTask = await this.enrichTaskReference(task);
+
+    return this.assignDependenciesToTask(
+      enrichedTask,
+      await this.loadTaskDependencies(enrichedTask.id),
+    );
   }
 
   private async assertTaskReadable(
@@ -510,99 +704,102 @@ export class LearningTaskService extends CourseDomainService {
     courseId: string,
     taskId: string | undefined,
     unlockMode: TaskUnlockMode,
-    prerequisiteTaskId?: string,
+    dependencies: LearningTaskDependencyDto[],
     courseVersionId?: string,
   ): Promise<void> {
-    if (unlockMode === TaskUnlockMode.IMMEDIATE && prerequisiteTaskId) {
+    if (unlockMode === TaskUnlockMode.IMMEDIATE && dependencies.length > 0) {
       throw new ApiValidationError('Immediately available tasks cannot define a prerequisite');
     }
 
-    if (unlockMode === TaskUnlockMode.AUTOMATIC && !prerequisiteTaskId) {
+    if (unlockMode === TaskUnlockMode.AUTOMATIC && dependencies.length === 0) {
       throw new ApiValidationError('Automatically unlocked tasks require a prerequisite');
     }
 
-    if (!prerequisiteTaskId) {
+    if (dependencies.length === 0) {
       return;
     }
 
-    if (taskId && prerequisiteTaskId === taskId) {
-      throw new ApiValidationError('A task cannot depend on itself');
-    }
+    const uniquePrerequisiteIds = new Set<string>();
 
-    const prerequisite = await this.repositories.tasks.findOne({
-      where: { id: prerequisiteTaskId },
-    });
+    for (const dependency of dependencies) {
+      const prerequisiteTaskId = dependency.prerequisiteTaskId;
 
-    if (
-      !prerequisite ||
-      prerequisite.courseId !== courseId ||
-      (courseVersionId && prerequisite.courseVersionId !== courseVersionId)
-    ) {
-      throw new ApiValidationError(
-        'Prerequisite task must belong to the same content version',
-      );
-    }
-
-    const visitedTaskIds = new Set<string>();
-    let currentTaskId: string | undefined = prerequisiteTaskId;
-
-    while (currentTaskId) {
-      if (taskId && currentTaskId === taskId) {
-        throw new ApiValidationError('Cyclic task prerequisites are not allowed');
+      if (taskId && prerequisiteTaskId === taskId) {
+        throw new ApiValidationError('A task cannot depend on itself');
       }
 
-      if (visitedTaskIds.has(currentTaskId)) {
-        throw new ApiValidationError('Cyclic task prerequisites are not allowed');
+      if (uniquePrerequisiteIds.has(prerequisiteTaskId)) {
+        throw new ApiValidationError('Task dependencies must be unique');
       }
 
-      visitedTaskIds.add(currentTaskId);
+      uniquePrerequisiteIds.add(prerequisiteTaskId);
 
-      const currentTask = await this.repositories.tasks.findOne({
-        where: { id: currentTaskId },
+      const prerequisite = await this.repositories.tasks.findOne({
+        where: { id: prerequisiteTaskId },
       });
 
-      if (!currentTask) {
-        return;
-      }
-
       if (
-        currentTask.courseId !== courseId ||
-        (courseVersionId && currentTask.courseVersionId !== courseVersionId)
+        !prerequisite ||
+        prerequisite.courseId !== courseId ||
+        (courseVersionId && prerequisite.courseVersionId !== courseVersionId)
       ) {
         throw new ApiValidationError(
           'Prerequisite task must belong to the same content version',
         );
       }
 
-      currentTaskId = currentTask.prerequisiteTaskId;
+      const visitedTaskIds = new Set<string>();
+      const taskIdsToVisit = [prerequisiteTaskId];
+
+      while (taskIdsToVisit.length > 0) {
+        const currentTaskId = taskIdsToVisit.pop();
+
+        if (!currentTaskId) {
+          continue;
+        }
+
+        if (taskId && currentTaskId === taskId) {
+          throw new ApiValidationError('Cyclic task prerequisites are not allowed');
+        }
+
+        if (visitedTaskIds.has(currentTaskId)) {
+          throw new ApiValidationError('Cyclic task prerequisites are not allowed');
+        }
+
+        visitedTaskIds.add(currentTaskId);
+
+        const currentTask = await this.repositories.tasks.findOne({
+          where: { id: currentTaskId },
+          relations: ['dependencies'],
+        });
+
+        if (!currentTask) {
+          return;
+        }
+
+        if (
+          currentTask.courseId !== courseId ||
+          (courseVersionId && currentTask.courseVersionId !== courseVersionId)
+        ) {
+          throw new ApiValidationError(
+            'Prerequisite task must belong to the same content version',
+          );
+        }
+
+        const currentDependencies = currentTask.dependencies?.length
+          ? currentTask.dependencies
+          : await this.loadTaskDependencies(currentTask.id);
+        taskIdsToVisit.push(
+          ...(
+            currentDependencies.length > 0
+              ? currentDependencies.map((entry) => entry.prerequisiteTaskId)
+              : currentTask.prerequisiteTaskId
+                ? [currentTask.prerequisiteTaskId]
+                : []
+          ),
+        );
+      }
     }
-  }
-
-  private async isTaskPrerequisiteCompleted(
-    task: Task,
-    enrollmentId: string,
-  ): Promise<boolean> {
-    if (!task.prerequisiteTaskId) {
-      return false;
-    }
-
-    const [prerequisite, prerequisiteProgress] = await Promise.all([
-      this.repositories.tasks.findOne({
-        where: {
-          id: task.prerequisiteTaskId,
-        },
-      }),
-      this.repositories.taskProgress.findOne({
-        where: {
-          taskId: task.prerequisiteTaskId,
-          enrollmentId,
-        },
-      }),
-    ]);
-
-    return prerequisite
-      ? this.isTaskCompletionSuccessful(prerequisite, prerequisiteProgress)
-      : false;
   }
 
   private async isTaskEligibleByRules(
@@ -614,10 +811,77 @@ export class LearningTaskService extends CourseDomainService {
     }
 
     if (task.unlockMode === TaskUnlockMode.AUTOMATIC) {
-      return this.isTaskPrerequisiteCompleted(task, enrollmentId);
+      const dependencies = task.dependencies?.length
+        ? task.dependencies
+        : await this.loadTaskDependencies(task.id);
+      const effectiveDependencies = dependencies.length > 0
+        ? dependencies
+        : task.prerequisiteTaskId
+          ? [{
+            prerequisiteTaskId: task.prerequisiteTaskId,
+            condition: TaskDependencyCondition.PASSED,
+            operator: TaskDependencyOperator.ALL_OF,
+          } as TaskDependency]
+          : [];
+
+      if (effectiveDependencies.length === 0) {
+        return false;
+      }
+
+      const results = await Promise.all(
+        effectiveDependencies.map((dependency) =>
+          this.isTaskDependencySatisfied(dependency, enrollmentId),
+        ),
+      );
+      const operator = effectiveDependencies[0]?.operator ?? TaskDependencyOperator.ALL_OF;
+
+      return operator === TaskDependencyOperator.ANY_OF
+        ? results.some(Boolean)
+        : results.every(Boolean);
     }
 
     return false;
+  }
+
+  private async isTaskDependencySatisfied(
+    dependency: Pick<TaskDependency, 'prerequisiteTaskId' | 'condition'>,
+    enrollmentId: string,
+  ): Promise<boolean> {
+    const [prerequisite, prerequisiteProgress] = await Promise.all([
+      this.repositories.tasks.findOne({
+        where: {
+          id: dependency.prerequisiteTaskId,
+        },
+      }),
+      this.repositories.taskProgress.findOne({
+        where: {
+          taskId: dependency.prerequisiteTaskId,
+          enrollmentId,
+        },
+      }),
+    ]);
+
+    if (!prerequisite || !prerequisiteProgress) {
+      return false;
+    }
+
+    switch (dependency.condition) {
+      case TaskDependencyCondition.COMPLETED:
+        return prerequisiteProgress.status === TaskProgressStatus.COMPLETED;
+      case TaskDependencyCondition.PASSED:
+        return this.isTaskCompletionSuccessful(prerequisite, prerequisiteProgress);
+      case TaskDependencyCondition.FAILED:
+        return prerequisiteProgress.status === TaskProgressStatus.FAILED ||
+          prerequisiteProgress.resultPassed === false;
+      case TaskDependencyCondition.SUBMITTED:
+        return [
+          TaskProgressStatus.SUBMITTED,
+          TaskProgressStatus.COMPLETED,
+          TaskProgressStatus.FAILED,
+        ].includes(prerequisiteProgress.status);
+      default:
+        return false;
+    }
   }
 
   private isMutableAvailableProgress(progress: TaskProgress): boolean {
@@ -1072,6 +1336,7 @@ export class LearningTaskService extends CourseDomainService {
     task: Task,
     progress: TaskProgress | null,
     tasksById: Map<string, Task>,
+    enrollmentId?: string,
   ): Promise<string | undefined> {
     if (progress && progress.status !== TaskProgressStatus.LOCKED) {
       return undefined;
@@ -1081,21 +1346,80 @@ export class LearningTaskService extends CourseDomainService {
       return 'Diese Aufgabe muss durch eine Lehrperson freigeschaltet werden.';
     }
 
-    if (task.unlockMode === TaskUnlockMode.AUTOMATIC && task.prerequisiteTaskId) {
-      const prerequisite =
-        tasksById.get(task.prerequisiteTaskId) ??
-        (await this.repositories.tasks.findOne({
-          where: { id: task.prerequisiteTaskId },
-        }));
-      const enrichedPrerequisite = prerequisite
-        ? await this.enrichTaskReference(prerequisite)
-        : null;
-      const title = enrichedPrerequisite?.title ?? 'die vorherige Aufgabe';
+    if (task.unlockMode === TaskUnlockMode.AUTOMATIC) {
+      const dependencies = task.dependencies?.length
+        ? task.dependencies
+        : await this.loadTaskDependencies(task.id);
+      const effectiveDependencies = dependencies.length > 0
+        ? dependencies
+        : task.prerequisiteTaskId
+          ? [{
+            prerequisiteTaskId: task.prerequisiteTaskId,
+            condition: TaskDependencyCondition.PASSED,
+            operator: TaskDependencyOperator.ALL_OF,
+          } as TaskDependency]
+          : [];
 
-      return `Diese Aufgabe wird freigeschaltet, sobald "${title}" erfolgreich abgeschlossen wurde.`;
+      if (effectiveDependencies.length === 0) {
+        return 'Diese Aufgabe hat noch keine gültige Freischaltregel.';
+      }
+
+      const openDependencies: TaskDependency[] = [];
+
+      if (enrollmentId) {
+        for (const dependency of effectiveDependencies) {
+          if (!(await this.isTaskDependencySatisfied(dependency, enrollmentId))) {
+            openDependencies.push(dependency);
+          }
+        }
+      }
+
+      const relevantDependencies = openDependencies.length > 0
+        ? openDependencies
+        : effectiveDependencies;
+      const titles = await Promise.all(
+        relevantDependencies.slice(0, 3).map(async (dependency) => {
+          const prerequisite =
+            dependency.prerequisiteTask ??
+            tasksById.get(dependency.prerequisiteTaskId) ??
+            (await this.repositories.tasks.findOne({
+              where: { id: dependency.prerequisiteTaskId },
+            }));
+          const enrichedPrerequisite = prerequisite
+            ? await this.enrichTaskReference(prerequisite)
+            : null;
+
+          return `"${enrichedPrerequisite?.title ?? 'eine Voraussetzung'}"`;
+        }),
+      );
+      const operator = effectiveDependencies[0]?.operator ?? TaskDependencyOperator.ALL_OF;
+      const action = operator === TaskDependencyOperator.ANY_OF
+        ? 'eine dieser Voraussetzungen'
+        : 'alle Voraussetzungen';
+
+      if (titles.length === 1) {
+        return `Diese Aufgabe wird freigeschaltet, sobald ${titles[0]} ${this.formatDependencyCondition(relevantDependencies[0].condition)} wurde.`;
+      }
+
+      return `Diese Aufgabe wird freigeschaltet, sobald ${action} erfüllt sind: ${titles.join(', ')}.`;
     }
 
     return undefined;
+  }
+
+  private formatDependencyCondition(condition: TaskDependencyCondition): string {
+    switch (condition) {
+      case TaskDependencyCondition.COMPLETED:
+        return 'abgeschlossen';
+      case TaskDependencyCondition.PASSED:
+        return 'bestanden';
+      case TaskDependencyCondition.FAILED:
+        return 'nicht bestanden';
+      case TaskDependencyCondition.SUBMITTED:
+        return 'abgegeben';
+      default:
+        return 'erfüllt';
+    }
   }
 
   private countTaskProgress(
@@ -1148,7 +1472,9 @@ export class LearningTaskService extends CourseDomainService {
       },
       order: { order: 'ASC' },
     });
-    const tasks = await this.enrichTaskReferences(taskReferences);
+    const tasks = await this.enrichTaskDependencies(
+      await this.enrichTaskReferences(taskReferences),
+    );
     const visibleTasks = includeUnpublished
       ? tasks
       : tasks.filter((task) => task.isPublished);
@@ -1162,6 +1488,7 @@ export class LearningTaskService extends CourseDomainService {
         task,
         progress,
         tasksById,
+        enrollment.id,
       );
       let progressForDto = progress;
       let groupContext = null;
@@ -1286,16 +1613,46 @@ export class LearningTaskService extends CourseDomainService {
     completedTask: Task,
     enrollment: Enrollment,
   ): Promise<void> {
-    const nextTasks = await this.repositories.tasks.find({
-      where: {
-        courseId: completedTask.courseId,
-        courseRunId: completedTask.courseRunId,
-        ...(completedTask.courseVersionId ? { courseVersionId: completedTask.courseVersionId } : {}),
-        prerequisiteTaskId: completedTask.id,
-        unlockMode: TaskUnlockMode.AUTOMATIC,
-      },
-      order: { order: 'ASC' },
-    });
+    const [legacyNextTasks, dependencyLinks] = await Promise.all([
+      this.repositories.tasks.find({
+        where: {
+          courseId: completedTask.courseId,
+          courseRunId: completedTask.courseRunId,
+          ...(completedTask.courseVersionId ? { courseVersionId: completedTask.courseVersionId } : {}),
+          prerequisiteTaskId: completedTask.id,
+          unlockMode: TaskUnlockMode.AUTOMATIC,
+        },
+        order: { order: 'ASC' },
+      }),
+      this.repositories.taskDependencies.find({
+        where: {
+          prerequisiteTaskId: completedTask.id,
+        },
+        relations: ['task', 'prerequisiteTask'],
+      }),
+    ]);
+    const dependencyTaskIds = dependencyLinks
+      .map((dependency) => dependency.taskId)
+      .filter(Boolean);
+    const dependencyNextTasks = dependencyTaskIds.length > 0
+      ? await this.repositories.tasks.find({
+        where: {
+          id: this.repositories.in(dependencyTaskIds),
+          courseId: completedTask.courseId,
+          courseRunId: completedTask.courseRunId,
+          ...(completedTask.courseVersionId ? { courseVersionId: completedTask.courseVersionId } : {}),
+          unlockMode: TaskUnlockMode.AUTOMATIC,
+        },
+        order: { order: 'ASC' },
+      })
+      : [];
+    const nextTasksById = new Map<string, Task>();
+
+    for (const task of [...legacyNextTasks, ...dependencyNextTasks]) {
+      nextTasksById.set(task.id, task);
+    }
+
+    const nextTasks = await this.enrichTaskDependencies([...nextTasksById.values()]);
 
     for (const nextTask of nextTasks) {
       if (!nextTask.isPublished) {
@@ -1348,6 +1705,7 @@ export class LearningTaskService extends CourseDomainService {
       progress.resultRecordedAt = now;
       progress.updatedBy = actorId;
       await this.repositories.taskProgress.save(progress);
+      await this.unlockEligibleNextTasks(task, enrollment);
     }
   }
 
@@ -1370,15 +1728,14 @@ export class LearningTaskService extends CourseDomainService {
     const unlockMode = this.normalizeTaskUnlockMode(body?.unlockMode);
     const gradingMode = this.normalizeTaskGradingMode(body?.gradingMode);
     const workMode = this.normalizeTaskWorkMode(body?.workMode);
+    const learningPathType = this.normalizeTaskLearningPathType(body?.learningPathType);
     const maxPoints = this.parseTaskAssessmentNumber(body?.maxPoints, 'maxPoints');
     const passThreshold = this.parseTaskAssessmentNumber(
       body?.passThreshold,
       'passThreshold',
       { max: 100 },
     );
-    const prerequisiteTaskId = this.normalizeTaskPrerequisite(
-      body?.prerequisiteTaskId,
-    );
+    const dependencyConfig = this.normalizeTaskDependencies(body);
     const externalTaskId = body?.externalTaskId
       ? String(body.externalTaskId).trim()
       : randomUUID();
@@ -1391,7 +1748,7 @@ export class LearningTaskService extends CourseDomainService {
       normalizedCourseId,
       undefined,
       unlockMode,
-      prerequisiteTaskId,
+      dependencyConfig.dependencies,
       version.id,
     );
     const taskServiceTask = await this.createTaskContent({
@@ -1415,9 +1772,10 @@ export class LearningTaskService extends CourseDomainService {
     task.courseVersion = version;
     task.order = this.parseTaskOrder(body?.order);
     task.unlockMode = unlockMode;
-    task.prerequisiteTaskId = prerequisiteTaskId;
+    task.prerequisiteTaskId = dependencyConfig.prerequisiteTaskId;
     task.gradingMode = gradingMode;
     task.workMode = workMode;
+    task.learningPathType = learningPathType;
     task.maxPoints = maxPoints;
     task.passThreshold = passThreshold;
     task.feedbackRequired = body?.feedbackRequired === true;
@@ -1430,6 +1788,7 @@ export class LearningTaskService extends CourseDomainService {
       await this.repositories.tasks.save(task),
       taskServiceTask,
     );
+    await this.syncTaskDependencies(savedTask, dependencyConfig.dependencies, actorId);
     await this.refreshCourseVersionContent(savedTask.courseVersionId);
     await this.recordAuditEvent({
       eventType: AuditEventType.TASK_CREATED,
@@ -1442,6 +1801,7 @@ export class LearningTaskService extends CourseDomainService {
       summary: `Aufgabe erstellt: ${savedTask.title}`,
       metadataJson: {
         gradingMode: savedTask.gradingMode,
+        learningPathType: savedTask.learningPathType,
         workMode: savedTask.workMode,
         unlockMode: savedTask.unlockMode,
         published: savedTask.isPublished,
@@ -1473,7 +1833,9 @@ export class LearningTaskService extends CourseDomainService {
       },
       order: { order: 'ASC' },
     });
-    const tasks = await this.enrichTaskReferences(taskReferences);
+    const tasks = await this.enrichTaskDependencies(
+      await this.enrichTaskReferences(taskReferences),
+    );
 
     return tasks
       .filter((task) => canManage || task.isPublished)
@@ -1503,7 +1865,9 @@ export class LearningTaskService extends CourseDomainService {
       },
       order: { order: 'ASC' },
     });
-    const tasks = await this.enrichTaskReferences(taskReferences);
+    const tasks = await this.enrichTaskDependencies(
+      await this.enrichTaskReferences(taskReferences),
+    );
 
     return tasks.map(mapLearningTaskToDto);
   }
@@ -1533,7 +1897,9 @@ export class LearningTaskService extends CourseDomainService {
       },
       order: { order: 'ASC' },
     });
-    const tasks = await this.enrichTaskReferences(taskReferences);
+    const tasks = await this.enrichTaskDependencies(
+      await this.enrichTaskReferences(taskReferences),
+    );
 
     return tasks.map(mapLearningTaskToDto);
   }
@@ -1556,6 +1922,7 @@ export class LearningTaskService extends CourseDomainService {
     const actorId = this.requireActorUserId(actorUserId);
     const task = await this.findLearningTaskOrThrow(id);
     await this.assertTaskManageable(task, actorId);
+    const existingDependencies = await this.loadTaskDependencies(task.id);
 
     const unlockMode =
       body.unlockMode !== undefined
@@ -1569,6 +1936,10 @@ export class LearningTaskService extends CourseDomainService {
       body.workMode !== undefined
         ? this.normalizeTaskWorkMode(body.workMode, task.workMode)
         : task.workMode ?? TaskWorkMode.INDIVIDUAL;
+    const learningPathType =
+      body.learningPathType !== undefined
+        ? this.normalizeTaskLearningPathType(body.learningPathType, task.learningPathType)
+        : task.learningPathType ?? TaskLearningPathType.STANDARD;
     const maxPoints =
       body.maxPoints !== undefined
         ? this.parseTaskAssessmentNumber(body.maxPoints, 'maxPoints')
@@ -1577,17 +1948,26 @@ export class LearningTaskService extends CourseDomainService {
       body.passThreshold !== undefined
         ? this.parseTaskAssessmentNumber(body.passThreshold, 'passThreshold', { max: 100 })
         : (task.passThreshold === undefined || task.passThreshold === null ? null : Number(task.passThreshold));
-    const prerequisiteTaskId =
-      body.prerequisiteTaskId !== undefined
-        ? this.normalizeTaskPrerequisite(body.prerequisiteTaskId)
-        : task.prerequisiteTaskId;
+    const shouldSyncDependencies =
+      Object.prototype.hasOwnProperty.call(body, 'dependencies') ||
+      Object.prototype.hasOwnProperty.call(body, 'prerequisiteTaskId') ||
+      Object.prototype.hasOwnProperty.call(body, 'dependencyOperator');
+    const dependencyConfig = this.normalizeTaskDependencies(
+      body,
+      existingDependencies.map((dependency) => ({
+        id: dependency.id,
+        prerequisiteTaskId: dependency.prerequisiteTaskId,
+        condition: dependency.condition,
+        operator: dependency.operator,
+      })),
+    );
     this.validateTaskGradingConfiguration(gradingMode, maxPoints, passThreshold);
 
     await this.validateTaskConfiguration(
       task.courseId,
       task.id,
       unlockMode,
-      prerequisiteTaskId,
+      dependencyConfig.dependencies,
       task.courseVersionId,
     );
     const shouldUpdateTaskContent = [
@@ -1623,6 +2003,10 @@ export class LearningTaskService extends CourseDomainService {
       task.workMode = workMode;
     }
 
+    if (body.learningPathType !== undefined) {
+      task.learningPathType = learningPathType;
+    }
+
     if (body.maxPoints !== undefined) {
       task.maxPoints = maxPoints;
     }
@@ -1646,15 +2030,19 @@ export class LearningTaskService extends CourseDomainService {
     task.unlockMode = unlockMode;
     task.gradingMode = gradingMode;
     task.workMode = workMode;
+    task.learningPathType = learningPathType;
     task.maxPoints = maxPoints;
     task.passThreshold = passThreshold;
-    task.prerequisiteTaskId = prerequisiteTaskId;
+    task.prerequisiteTaskId = dependencyConfig.prerequisiteTaskId;
     task.updatedBy = actorId;
 
     const savedTask = this.applyTaskServiceContent(
       await this.repositories.tasks.save(task),
       taskServiceTask,
     );
+    savedTask.dependencies = shouldSyncDependencies
+      ? await this.syncTaskDependencies(savedTask, dependencyConfig.dependencies, actorId)
+      : existingDependencies;
     await this.reconcileTaskProgressAfterConfigurationChange(savedTask);
     await this.refreshCourseVersionContent(savedTask.courseVersionId);
     await this.recordAuditEvent({
@@ -1668,6 +2056,7 @@ export class LearningTaskService extends CourseDomainService {
       summary: `Aufgabe aktualisiert: ${savedTask.title}`,
       metadataJson: {
         gradingMode: savedTask.gradingMode,
+        learningPathType: savedTask.learningPathType,
         workMode: savedTask.workMode,
         unlockMode: savedTask.unlockMode,
         published: savedTask.isPublished,
@@ -1687,6 +2076,8 @@ export class LearningTaskService extends CourseDomainService {
       {
         unlockMode: body.unlockMode,
         prerequisiteTaskId: body.prerequisiteTaskId,
+        dependencyOperator: body.dependencyOperator,
+        dependencies: body.dependencies,
       },
       actorUserId,
     );
@@ -1748,7 +2139,9 @@ export class LearningTaskService extends CourseDomainService {
       },
     });
 
-    const enrichedTasks = await this.enrichTaskReferences(savedTasks);
+    const enrichedTasks = await this.enrichTaskDependencies(
+      await this.enrichTaskReferences(savedTasks),
+    );
 
     return enrichedTasks.sort((a, b) => a.order - b.order).map(mapLearningTaskToDto);
   }
@@ -1766,8 +2159,13 @@ export class LearningTaskService extends CourseDomainService {
         ...(task.courseVersionId ? { courseVersionId: task.courseVersionId } : {}),
       },
     });
+    const dependentTaskDependency = await this.repositories.taskDependencies.findOne({
+      where: {
+        prerequisiteTaskId: task.id,
+      },
+    });
 
-    if (dependentTask) {
+    if (dependentTask || dependentTaskDependency) {
       throw new ApiValidationError(
         'Task cannot be deleted while another task depends on it',
       );
@@ -1957,6 +2355,7 @@ export class LearningTaskService extends CourseDomainService {
       progress.status === TaskProgressStatus.FAILED &&
       progress.resultPassed === false
     ) {
+      await this.unlockEligibleNextTasks(task, enrollment);
       return this.buildLearningPathForEnrollment(task.courseId, enrollment);
     }
 
@@ -1981,9 +2380,7 @@ export class LearningTaskService extends CourseDomainService {
       await this.saveTaskAssessment(assessment);
     }
 
-    if (passed) {
-      await this.unlockEligibleNextTasks(task, enrollment);
-    }
+    await this.unlockEligibleNextTasks(task, enrollment);
 
     await this.recordAuditEvent({
       eventType: passed ? AuditEventType.TASK_COMPLETED : AuditEventType.TASK_FAILED,

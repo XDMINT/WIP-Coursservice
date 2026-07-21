@@ -18,6 +18,7 @@ import { LearningMaterial } from './entities/learning-material.entity';
 import { Assignment } from './entities/assignment.entity';
 import { Grade } from './entities/grade.entity';
 import { Task } from './entities/task.entity';
+import { TaskDependency } from './entities/task-dependency.entity';
 import { TaskAssessment } from './entities/task-assessment.entity';
 import { TaskProgress } from './entities/task-progress.entity';
 import { CourseResult } from './entities/course-result.entity';
@@ -46,6 +47,7 @@ import { CourseRepositoriesProvider } from './persistence/course-repositories.pr
       Grade,
       CourseResult,
       Task,
+      TaskDependency,
       TaskAssessment,
       TaskProgress,
       ContentRelease,

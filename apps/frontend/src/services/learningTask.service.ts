@@ -27,6 +27,13 @@ export enum TaskWorkMode {
   GROUP = 'GROUP'
 }
 
+export enum TaskLearningPathType {
+  STANDARD = 'STANDARD',
+  REMEDIAL = 'REMEDIAL',
+  DEEPENING = 'DEEPENING',
+  PRACTICE = 'PRACTICE'
+}
+
 export enum TaskAssessmentStatus {
   NOT_SUBMITTED = 'NOT_SUBMITTED',
   SUBMITTED = 'SUBMITTED',
@@ -42,6 +49,25 @@ export enum TaskUnlockSource {
   MANUAL = 'MANUAL'
 }
 
+export enum TaskDependencyCondition {
+  COMPLETED = 'COMPLETED',
+  PASSED = 'PASSED',
+  FAILED = 'FAILED',
+  SUBMITTED = 'SUBMITTED'
+}
+
+export enum TaskDependencyOperator {
+  ALL_OF = 'ALL_OF',
+  ANY_OF = 'ANY_OF'
+}
+
+export type LearningTaskDependency = {
+  id?: string
+  prerequisiteTaskId: string
+  condition: TaskDependencyCondition
+  operator: TaskDependencyOperator
+}
+
 export type LearningTask = {
   id: string
   courseId: string
@@ -53,9 +79,12 @@ export type LearningTask = {
   order: number
   unlockMode: TaskUnlockMode
   prerequisiteTaskId?: string
+  dependencyOperator?: TaskDependencyOperator
+  dependencies?: LearningTaskDependency[]
   completionCriteria?: Record<string, unknown>
   gradingMode: TaskGradingMode
   workMode?: TaskWorkMode
+  learningPathType?: TaskLearningPathType
   maxPoints?: number | null
   passThreshold?: number | null
   feedbackRequired: boolean
@@ -173,9 +202,15 @@ export type UpsertLearningTaskInput = {
   order?: number
   unlockMode?: TaskUnlockMode
   prerequisiteTaskId?: string | null
+  dependencyOperator?: TaskDependencyOperator
+  dependencies?: Array<{
+    prerequisiteTaskId?: string | null
+    condition?: TaskDependencyCondition
+  }>
   completionCriteria?: Record<string, unknown>
   gradingMode?: TaskGradingMode
   workMode?: TaskWorkMode
+  learningPathType?: TaskLearningPathType
   maxPoints?: number | null
   passThreshold?: number | null
   feedbackRequired?: boolean
@@ -220,7 +255,7 @@ class LearningTaskService {
     return response.data
   }
 
-  async updateReleaseConfig(taskId: string, input: Pick<UpsertLearningTaskInput, 'prerequisiteTaskId' | 'unlockMode'>): Promise<LearningTask> {
+  async updateReleaseConfig(taskId: string, input: Pick<UpsertLearningTaskInput, 'prerequisiteTaskId' | 'unlockMode' | 'dependencyOperator' | 'dependencies'>): Promise<LearningTask> {
     const response = await apiClient.put<LearningTask>(`/courses/tasks/${taskId}/release-config`, input)
     return response.data
   }
@@ -389,6 +424,19 @@ export const formatTaskWorkMode = (mode?: TaskWorkMode): string => {
   }
 
   return labels[mode ?? TaskWorkMode.INDIVIDUAL] ?? 'Einzelaufgabe'
+}
+
+export const formatTaskLearningPathType = (type?: TaskLearningPathType): string => {
+  switch (type) {
+    case TaskLearningPathType.REMEDIAL:
+      return 'Wiederholung'
+    case TaskLearningPathType.DEEPENING:
+      return 'Vertiefung'
+    case TaskLearningPathType.PRACTICE:
+      return 'Praxis'
+    default:
+      return 'Standard'
+  }
 }
 
 export const formatAssessmentStatus = (status?: TaskAssessmentStatus): string => {

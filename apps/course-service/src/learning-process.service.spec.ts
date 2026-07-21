@@ -9,11 +9,22 @@ import { CourseMemberRole, Enrollment } from './entities/enrollment.entity';
 import { CourseGroup } from './entities/course-group.entity';
 import { GroupMembership, MembershipRole } from './entities/group-membership.entity';
 import { GroupTaskProgress } from './entities/group-task-progress.entity';
-import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from './entities/task.entity';
+import {
+  Task,
+  TaskGradingMode,
+  TaskLearningPathType,
+  TaskUnlockMode,
+  TaskWorkMode,
+} from './entities/task.entity';
 import {
   TaskAssessmentStatus,
   TaskAssessmentTargetType,
 } from './entities/task-assessment.entity';
+import {
+  TaskDependency,
+  TaskDependencyCondition,
+  TaskDependencyOperator,
+} from './entities/task-dependency.entity';
 import {
   TaskProgress,
   TaskProgressStatus,
@@ -82,6 +93,7 @@ const createTask = (overrides: Partial<Task> = {}): Task =>
     gradingMode: TaskGradingMode.NOT_GRADED,
     maxPoints: null,
     passThreshold: null,
+    learningPathType: TaskLearningPathType.STANDARD,
     feedbackRequired: false,
     allowRetries: false,
     isPublished: true,
@@ -302,6 +314,7 @@ const createLearningProcessFixture = (
   const enrollmentRepository = createRepository<Enrollment>(enrollments, 'enrollment');
   const taskRepository = createRepository<Task>([task1, task2, task3, otherTask], 'task');
   const taskAssessmentRepository = createRepository([], 'assessment');
+  const taskDependencyRepository = createRepository<TaskDependency>([], 'dependency');
   const taskProgressRepository = createRepository<TaskProgress>([], 'progress');
   const courseGroupRepository = createRepository<CourseGroup>([], 'group');
   const groupMembershipRepository = createRepository<GroupMembership>([], 'group-membership');
@@ -347,6 +360,7 @@ const createLearningProcessFixture = (
       groupMemberships: groupMembershipRepository as any,
       groupTaskProgress: groupTaskProgressRepository as any,
       learningMaterials: createRepository([], 'material') as any,
+      taskDependencies: taskDependencyRepository as any,
       taskAssessments: taskAssessmentRepository as any,
       taskProgress: taskProgressRepository as any,
       tasks: taskRepository as any,
@@ -366,6 +380,7 @@ const createLearningProcessFixture = (
     materialStorage,
     service,
     taskAssessmentRepository,
+    taskDependencyRepository,
     taskEvaluationClient,
     taskProgressRepository,
     taskRepository,
@@ -429,6 +444,66 @@ describe('CoursesService learning process', () => {
     const reloadedPath = await service.getLearningPathProgress('course-id', '3');
 
     expect(reloadedPath.tasks.find((task) => task.id === 'task-2')).toMatchObject({
+      status: TaskProgressStatus.AVAILABLE,
+      unlockSource: TaskUnlockSource.AUTOMATIC,
+    });
+  });
+
+  it('supports flexible task dependencies that require multiple passed prerequisites', async () => {
+    const {
+      service,
+      taskDependencyRepository,
+      taskRepository,
+    } = createLearningProcessFixture();
+    const flexibleTask = createTask({
+      id: 'task-flex',
+      courseVersionId: 'course-version-id',
+      title: 'Vertiefung freischalten',
+      order: 4,
+      unlockMode: TaskUnlockMode.AUTOMATIC,
+      prerequisiteTaskId: 'task-1',
+    });
+    taskRepository.items.push(flexibleTask);
+    taskDependencyRepository.items.push(
+      {
+        id: 'dependency-1',
+        taskId: 'task-flex',
+        task: flexibleTask,
+        prerequisiteTaskId: 'task-1',
+        condition: TaskDependencyCondition.PASSED,
+        operator: TaskDependencyOperator.ALL_OF,
+      } as TaskDependency,
+      {
+        id: 'dependency-2',
+        taskId: 'task-flex',
+        task: flexibleTask,
+        prerequisiteTaskId: 'task-2',
+        condition: TaskDependencyCondition.PASSED,
+        operator: TaskDependencyOperator.ALL_OF,
+      } as TaskDependency,
+    );
+
+    let path = await service.completeLearningTask('task-1', '3');
+
+    expect(path.tasks.find((task) => task.id === 'task-flex')).toMatchObject({
+      status: TaskProgressStatus.LOCKED,
+      dependencies: expect.arrayContaining([
+        expect.objectContaining({
+          prerequisiteTaskId: 'task-1',
+          condition: TaskDependencyCondition.PASSED,
+        }),
+        expect.objectContaining({
+          prerequisiteTaskId: 'task-2',
+          condition: TaskDependencyCondition.PASSED,
+        }),
+      ]),
+    });
+    expect(path.tasks.find((task) => task.id === 'task-flex')?.lockedReason)
+      .toContain('Grundlagen anwenden');
+
+    path = await service.completeLearningTask('task-2', '3');
+
+    expect(path.tasks.find((task) => task.id === 'task-flex')).toMatchObject({
       status: TaskProgressStatus.AVAILABLE,
       unlockSource: TaskUnlockSource.AUTOMATIC,
     });
@@ -677,6 +752,64 @@ describe('CoursesService learning process', () => {
     ).then(() => service.getLearningPathProgress('course-id', '3'));
 
     expect(path.tasks.find((task) => task.id === followUpTask.id)).toMatchObject({
+      locked: false,
+      status: TaskProgressStatus.AVAILABLE,
+      unlockSource: TaskUnlockSource.AUTOMATIC,
+    });
+  });
+
+  it('unlocks remedial follow-up tasks automatically after the prerequisite was failed', async () => {
+    const {
+      service,
+      taskDependencyRepository,
+    } = createLearningProcessFixture();
+    const remedialTask = await service.createLearningTask(
+      'course-id',
+      {
+        dependencies: [
+          {
+            prerequisiteTaskId: 'task-3',
+            condition: TaskDependencyCondition.FAILED,
+          },
+        ],
+        dependencyOperator: TaskDependencyOperator.ALL_OF,
+        gradingMode: TaskGradingMode.SELF_CONFIRMATION,
+        isPublished: true,
+        learningPathType: TaskLearningPathType.REMEDIAL,
+        order: 4,
+        title: 'Grundlagen wiederholen',
+        unlockMode: TaskUnlockMode.AUTOMATIC,
+      },
+      '1',
+    );
+
+    await service.completeLearningTask('task-1', '3');
+    await service.completeLearningTask('task-2', '3');
+    await service.manuallyUnlockLearningTask('task-3', { studentId: '3' }, '1');
+    await service.startLearningTask('task-3', '3');
+    await service.submitLearningTask('task-3', {}, '3');
+    await service.setManualTaskAssessment(
+      'course-id',
+      'course-run-id',
+      'task-3',
+      '3',
+      {
+        feedback: 'Bitte Wiederholung bearbeiten.',
+        maxPoints: 10,
+        points: 4,
+      },
+      '1',
+    );
+
+    const path = await service.getLearningPathProgress('course-id', '3');
+
+    expect(taskDependencyRepository.items.find((dependency) => dependency.taskId === remedialTask.id))
+      .toMatchObject({
+        condition: TaskDependencyCondition.FAILED,
+        prerequisiteTaskId: 'task-3',
+      });
+    expect(path.tasks.find((task) => task.id === remedialTask.id)).toMatchObject({
+      learningPathType: TaskLearningPathType.REMEDIAL,
       locked: false,
       status: TaskProgressStatus.AVAILABLE,
       unlockSource: TaskUnlockSource.AUTOMATIC,

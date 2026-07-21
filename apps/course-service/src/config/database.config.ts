@@ -19,6 +19,7 @@ import { LearningMaterial } from '../entities/learning-material.entity';
 import { TaskProgress } from '../entities/task-progress.entity';
 import { Task } from '../entities/task.entity';
 import { TaskAssessment } from '../entities/task-assessment.entity';
+import { TaskDependency } from '../entities/task-dependency.entity';
 import { CreateCourseSchema1720000000000 } from '../migrations/1720000000000-CreateCourseSchema';
 import { AddCourseAuditFields1720000001000 } from '../migrations/1720000001000-AddCourseAuditFields';
 import { ExpandLearningMaterials1720000002000 } from '../migrations/1720000002000-ExpandLearningMaterials';
@@ -36,6 +37,8 @@ import { AddTaskAssessments1720000013000 } from '../migrations/1720000013000-Add
 import { AddAuditEvents1720000014000 } from '../migrations/1720000014000-AddAuditEvents';
 import { AddRunGroupsAndGroupTasks1720000015000 } from '../migrations/1720000015000-AddRunGroupsAndGroupTasks';
 import { SplitTaskContentToTaskService1720000016000 } from '../migrations/1720000016000-SplitTaskContentToTaskService';
+import { AddTaskDependencies1720000017000 } from '../migrations/1720000017000-AddTaskDependencies';
+import { AddTaskLearningPathType1720000018000 } from '../migrations/1720000018000-AddTaskLearningPathType';
 
 const entities = [
   AuditEvent,
@@ -51,6 +54,7 @@ const entities = [
   Grade,
   CourseResult,
   Task,
+  TaskDependency,
   TaskAssessment,
   TaskProgress,
   ContentRelease,
@@ -97,6 +101,8 @@ export const createDatabaseOptions = (
     AddAuditEvents1720000014000,
     AddRunGroupsAndGroupTasks1720000015000,
     SplitTaskContentToTaskService1720000016000,
+    AddTaskDependencies1720000017000,
+    AddTaskLearningPathType1720000018000,
   ],
   migrationsRun: parseBoolean(
     configService.get<string>('DATABASE_MIGRATIONS_RUN'),

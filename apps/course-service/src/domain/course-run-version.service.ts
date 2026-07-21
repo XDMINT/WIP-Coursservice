@@ -28,7 +28,18 @@ import {
   LearningMaterialReleaseMode,
   LearningMaterialType,
 } from '../entities/learning-material.entity';
-import { Task, TaskGradingMode, TaskUnlockMode, TaskWorkMode } from '../entities/task.entity';
+import {
+  Task,
+  TaskGradingMode,
+  TaskLearningPathType,
+  TaskUnlockMode,
+  TaskWorkMode,
+} from '../entities/task.entity';
+import {
+  TaskDependency,
+  TaskDependencyCondition,
+  TaskDependencyOperator,
+} from '../entities/task-dependency.entity';
 
 
 type CourseVersionSnapshotTask = {
@@ -41,11 +52,18 @@ type CourseVersionSnapshotTask = {
   order?: number;
   unlockMode?: TaskUnlockMode | string;
   prerequisiteTaskId?: string | null;
+  dependencyOperator?: TaskDependencyOperator | string;
+  dependencies?: Array<{
+    prerequisiteTaskId?: string | null;
+    condition?: TaskDependencyCondition | string;
+    operator?: TaskDependencyOperator | string;
+  }>;
   completionCriteria?: unknown;
   isPublished?: boolean;
   demoKey?: string | null;
   gradingMode?: TaskGradingMode | string;
   workMode?: TaskWorkMode | string;
+  learningPathType?: TaskLearningPathType | string;
   maxPoints?: number | string | null;
   passThreshold?: number | string | null;
   feedbackRequired?: boolean;
@@ -430,6 +448,21 @@ export class CourseRunVersionService extends CourseDomainService {
       }),
     ]);
     const tasks = await this.enrichTaskReferences(taskReferences);
+    const taskDependencies = tasks.length > 0
+      ? await this.repositories.taskDependencies.find({
+        where: {
+          taskId: this.repositories.in(tasks.map((task) => task.id)),
+        },
+        order: { createdAt: 'ASC' },
+      })
+      : [];
+    const dependenciesByTaskId = new Map<string, TaskDependency[]>();
+
+    for (const dependency of taskDependencies) {
+      const dependencies = dependenciesByTaskId.get(dependency.taskId) ?? [];
+      dependencies.push(dependency);
+      dependenciesByTaskId.set(dependency.taskId, dependencies);
+    }
 
     return {
       course: {
@@ -500,10 +533,17 @@ export class CourseRunVersionService extends CourseDomainService {
         order: task.order,
         unlockMode: task.unlockMode,
         prerequisiteTaskId: task.prerequisiteTaskId,
+        dependencyOperator: dependenciesByTaskId.get(task.id)?.[0]?.operator,
+        dependencies: (dependenciesByTaskId.get(task.id) ?? []).map((dependency) => ({
+          prerequisiteTaskId: dependency.prerequisiteTaskId,
+          condition: dependency.condition,
+          operator: dependency.operator,
+        })),
         demoKey: task.demoKey,
         isPublished: task.isPublished,
         gradingMode: task.gradingMode ?? TaskGradingMode.NOT_GRADED,
         workMode: task.workMode ?? TaskWorkMode.INDIVIDUAL,
+        learningPathType: task.learningPathType ?? TaskLearningPathType.STANDARD,
         maxPoints: task.maxPoints,
         passThreshold: task.passThreshold,
         feedbackRequired: task.feedbackRequired === true,
@@ -1129,6 +1169,7 @@ export class CourseRunVersionService extends CourseDomainService {
       task.isPublished = source.isPublished;
       task.gradingMode = source.gradingMode ?? TaskGradingMode.NOT_GRADED;
       task.workMode = source.workMode ?? TaskWorkMode.INDIVIDUAL;
+      task.learningPathType = source.learningPathType ?? TaskLearningPathType.STANDARD;
       task.maxPoints = source.maxPoints;
       task.passThreshold = source.passThreshold;
       task.feedbackRequired = source.feedbackRequired === true;
@@ -1165,6 +1206,31 @@ export class CourseRunVersionService extends CourseDomainService {
       }
     }
 
+    const sourceDependencies = sourceTasks.length > 0
+      ? await this.repositories.taskDependencies.find({
+        where: {
+          taskId: this.repositories.in(sourceTasks.map((task) => task.id)),
+        },
+      })
+      : [];
+
+    for (const sourceDependency of sourceDependencies) {
+      const copiedTaskId = taskIdMap.get(sourceDependency.taskId);
+      const copiedPrerequisiteId = taskIdMap.get(sourceDependency.prerequisiteTaskId);
+
+      if (!copiedTaskId || !copiedPrerequisiteId) {
+        continue;
+      }
+
+      await this.createCopiedTaskDependency(
+        copiedTaskId,
+        copiedPrerequisiteId,
+        sourceDependency.condition,
+        sourceDependency.operator,
+        actorId,
+      );
+    }
+
     return taskIdMap;
   }
 
@@ -1174,6 +1240,40 @@ export class CourseRunVersionService extends CourseDomainService {
     }
 
     return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  private normalizeSnapshotTaskDependencyOperator(value: unknown): TaskDependencyOperator {
+    const normalizedValue = String(value ?? TaskDependencyOperator.ALL_OF).toUpperCase() as TaskDependencyOperator;
+
+    return Object.values(TaskDependencyOperator).includes(normalizedValue)
+      ? normalizedValue
+      : TaskDependencyOperator.ALL_OF;
+  }
+
+  private normalizeSnapshotTaskDependencyCondition(value: unknown): TaskDependencyCondition {
+    const normalizedValue = String(value ?? TaskDependencyCondition.PASSED).toUpperCase() as TaskDependencyCondition;
+
+    return Object.values(TaskDependencyCondition).includes(normalizedValue)
+      ? normalizedValue
+      : TaskDependencyCondition.PASSED;
+  }
+
+  private async createCopiedTaskDependency(
+    taskId: string,
+    prerequisiteTaskId: string,
+    condition: TaskDependencyCondition,
+    operator: TaskDependencyOperator,
+    actorId: string,
+  ): Promise<void> {
+    const dependency = new TaskDependency();
+    dependency.taskId = taskId;
+    dependency.prerequisiteTaskId = prerequisiteTaskId;
+    dependency.condition = condition;
+    dependency.operator = operator;
+    dependency.createdBy = actorId;
+    dependency.updatedBy = actorId;
+
+    await this.repositories.taskDependencies.save(dependency);
   }
 
   private normalizeSnapshotTaskUnlockMode(value: unknown): TaskUnlockMode {
@@ -1198,6 +1298,14 @@ export class CourseRunVersionService extends CourseDomainService {
     return Object.values(TaskWorkMode).includes(normalizedValue)
       ? normalizedValue
       : TaskWorkMode.INDIVIDUAL;
+  }
+
+  private normalizeSnapshotTaskLearningPathType(value: unknown): TaskLearningPathType {
+    const normalizedValue = String(value ?? TaskLearningPathType.STANDARD).toUpperCase() as TaskLearningPathType;
+
+    return Object.values(TaskLearningPathType).includes(normalizedValue)
+      ? normalizedValue
+      : TaskLearningPathType.STANDARD;
   }
 
   private parseSnapshotTaskNumber(value?: number | string | null): number | null {
@@ -1317,6 +1425,7 @@ export class CourseRunVersionService extends CourseDomainService {
       task.isPublished = source.isPublished === true;
       task.gradingMode = gradingMode;
       task.workMode = this.normalizeSnapshotTaskWorkMode(source.workMode);
+      task.learningPathType = this.normalizeSnapshotTaskLearningPathType(source.learningPathType);
       task.maxPoints = maxPoints;
       task.passThreshold = passThreshold;
       task.feedbackRequired = source.feedbackRequired === true;
@@ -1333,22 +1442,63 @@ export class CourseRunVersionService extends CourseDomainService {
     }
 
     for (const source of sourceTasks) {
-      if (!source.id || !source.prerequisiteTaskId) {
+      if (!source.id) {
         continue;
       }
 
       const copiedTask = copiedTasksBySourceId.get(source.id);
-      const copiedPrerequisiteId = taskIdMap.get(source.prerequisiteTaskId);
+      const sourceDependencies = Array.isArray(source.dependencies)
+        ? source.dependencies
+        : [];
+      const effectiveDependencies = sourceDependencies.length > 0
+        ? sourceDependencies
+        : source.prerequisiteTaskId
+          ? [{
+            prerequisiteTaskId: source.prerequisiteTaskId,
+            condition: TaskDependencyCondition.PASSED,
+            operator: source.dependencyOperator ?? TaskDependencyOperator.ALL_OF,
+          }]
+          : [];
 
-      if (!copiedTask || !copiedPrerequisiteId) {
+      if (!copiedTask || effectiveDependencies.length === 0) {
+        continue;
+      }
+
+      const firstCopiedPrerequisiteId = taskIdMap.get(
+        String(effectiveDependencies[0]?.prerequisiteTaskId ?? ''),
+      );
+
+      if (!firstCopiedPrerequisiteId) {
         throw new ApiValidationError(
           'Eine Aufgabenabhängigkeit der ausgewählten Vorlage konnte nicht kopiert werden.',
         );
       }
 
-      copiedTask.prerequisiteTaskId = copiedPrerequisiteId;
+      copiedTask.prerequisiteTaskId = firstCopiedPrerequisiteId;
       copiedTask.updatedBy = actorId;
       await this.repositories.tasks.save(copiedTask);
+
+      for (const dependency of effectiveDependencies) {
+        const copiedPrerequisiteId = taskIdMap.get(
+          String(dependency.prerequisiteTaskId ?? ''),
+        );
+
+        if (!copiedPrerequisiteId) {
+          throw new ApiValidationError(
+            'Eine Aufgabenabhängigkeit der ausgewählten Vorlage konnte nicht kopiert werden.',
+          );
+        }
+
+        await this.createCopiedTaskDependency(
+          copiedTask.id,
+          copiedPrerequisiteId,
+          this.normalizeSnapshotTaskDependencyCondition(dependency.condition),
+          this.normalizeSnapshotTaskDependencyOperator(
+            dependency.operator ?? source.dependencyOperator,
+          ),
+          actorId,
+        );
+      }
     }
 
     return taskIdMap;

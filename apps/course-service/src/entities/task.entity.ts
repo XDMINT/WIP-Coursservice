@@ -12,6 +12,7 @@ import { CourseVersion } from './course-version.entity';
 import { GroupTaskProgress } from './group-task-progress.entity';
 import { TaskProgress } from './task-progress.entity';
 import { TaskAssessment } from './task-assessment.entity';
+import { TaskDependency } from './task-dependency.entity';
 
 export enum TaskUnlockMode {
   IMMEDIATE = 'IMMEDIATE',
@@ -29,6 +30,13 @@ export enum TaskGradingMode {
 export enum TaskWorkMode {
   INDIVIDUAL = 'INDIVIDUAL',
   GROUP = 'GROUP',
+}
+
+export enum TaskLearningPathType {
+  STANDARD = 'STANDARD',
+  REMEDIAL = 'REMEDIAL',
+  DEEPENING = 'DEEPENING',
+  PRACTICE = 'PRACTICE',
 }
 
 /**
@@ -75,6 +83,9 @@ export class Task {
 
   @Column({ type: 'varchar', default: TaskWorkMode.INDIVIDUAL })
   workMode: TaskWorkMode;
+
+  @Column({ type: 'varchar', default: TaskLearningPathType.STANDARD })
+  learningPathType: TaskLearningPathType;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   maxPoints?: number | null;
@@ -137,6 +148,12 @@ export class Task {
 
   @OneToMany(() => TaskAssessment, (assessment) => assessment.task)
   assessments: TaskAssessment[];
+
+  @OneToMany(() => TaskDependency, (dependency) => dependency.task)
+  dependencies?: TaskDependency[];
+
+  @OneToMany(() => TaskDependency, (dependency) => dependency.prerequisiteTask)
+  dependentTasks?: TaskDependency[];
 }
 
 export { Task as CourseTaskReference };

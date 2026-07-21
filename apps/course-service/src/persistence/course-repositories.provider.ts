@@ -16,6 +16,7 @@ import { GroupMembership } from '../entities/group-membership.entity';
 import { GroupTaskProgress } from '../entities/group-task-progress.entity';
 import { LearningMaterial } from '../entities/learning-material.entity';
 import { TaskAssessment } from '../entities/task-assessment.entity';
+import { TaskDependency } from '../entities/task-dependency.entity';
 import { TaskProgress } from '../entities/task-progress.entity';
 import { Task } from '../entities/task.entity';
 import { CourseRepositories } from './course-repositories';
@@ -41,6 +42,8 @@ export class CourseRepositoriesProvider extends CourseRepositories {
     enrollments: Repository<Enrollment>,
     @InjectRepository(Task)
     tasks: Repository<Task>,
+    @InjectRepository(TaskDependency)
+    taskDependencies: Repository<TaskDependency>,
     @InjectRepository(TaskAssessment)
     taskAssessments: Repository<TaskAssessment>,
     @InjectRepository(TaskProgress)
@@ -73,6 +76,7 @@ export class CourseRepositoriesProvider extends CourseRepositories {
       groupMemberships,
       groupTaskProgress,
       learningMaterials,
+      taskDependencies,
       taskAssessments,
       taskProgress,
       tasks,

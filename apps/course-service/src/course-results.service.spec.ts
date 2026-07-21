@@ -225,6 +225,7 @@ const createFixture = (options: {
       grades: gradeRepository as any,
       groupMemberships: emptyRepository() as any,
       learningMaterials: emptyRepository() as any,
+      taskDependencies: emptyRepository() as any,
       taskAssessments: emptyRepository() as any,
       taskProgress: emptyRepository() as any,
       tasks: emptyRepository() as any,

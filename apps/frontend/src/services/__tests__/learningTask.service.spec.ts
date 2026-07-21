@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import learningTaskService, { TaskAssessmentStatus, TaskGradingMode, TaskProgressStatus, TaskUnlockMode, formatAssessmentStatus, formatGradingMode, formatTaskStatus, formatUnlockMode } from '../learningTask.service'
+import learningTaskService, { TaskAssessmentStatus, TaskGradingMode, TaskLearningPathType, TaskProgressStatus, TaskUnlockMode, formatAssessmentStatus, formatGradingMode, formatTaskLearningPathType, formatTaskStatus, formatUnlockMode } from '../learningTask.service'
 import { apiClient } from '../apiClient'
 
 vi.mock('../apiClient', () => ({
@@ -155,6 +155,9 @@ describe('learningTaskService', () => {
     expect(formatTaskStatus(TaskProgressStatus.COMPLETED)).toBe('Erfolgreich abgeschlossen')
     expect(formatTaskStatus(TaskProgressStatus.SUBMITTED)).toBe('Wartet auf Bewertung')
     expect(formatGradingMode(TaskGradingMode.AUTOMATIC_MOCK)).toBe('Automatisch bewertet (Mock)')
+    expect(formatTaskLearningPathType(TaskLearningPathType.REMEDIAL)).toBe('Wiederholung')
+    expect(formatTaskLearningPathType(TaskLearningPathType.DEEPENING)).toBe('Vertiefung')
+    expect(formatTaskLearningPathType(TaskLearningPathType.PRACTICE)).toBe('Praxis')
     expect(formatAssessmentStatus(TaskAssessmentStatus.PENDING_REVIEW)).toBe('Wartet auf Bewertung')
     expect(formatUnlockMode(TaskUnlockMode.AUTOMATIC)).toBe('Automatisch')
     expect(formatUnlockMode(TaskUnlockMode.MANUAL)).toBe('Manuell')

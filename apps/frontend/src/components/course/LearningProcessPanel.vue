@@ -35,11 +35,19 @@
           </div>
           <div class="task-form__grid">
             <v-select v-model="newTask.unlockMode" :items="unlockModeOptions" item-title="title" item-value="value" label="Freischaltmodus" density="compact" />
-            <v-select v-model="newTask.prerequisiteTaskId" :items="createPrerequisiteOptions" item-title="title" item-value="id" label="Voraussetzung" density="compact" clearable :disabled="newTask.unlockMode === TaskUnlockMode.IMMEDIATE" />
+            <v-select v-model="newTask.dependencyOperator" :items="dependencyOperatorOptions" item-title="title" item-value="value" label="Regel" density="compact" :disabled="newTask.unlockMode !== TaskUnlockMode.AUTOMATIC" />
+            <v-select :model-value="newTask.dependencyTaskIds" :items="createPrerequisiteOptions" item-title="title" item-value="id" label="Voraussetzungen" density="compact" multiple chips closable-chips :disabled="newTask.unlockMode !== TaskUnlockMode.AUTOMATIC" @update:model-value="setNewTaskDependencyIds" />
+            <v-select v-model="newTask.learningPathType" :items="learningPathTypeOptions" item-title="title" item-value="value" label="Pfadtyp" density="compact" />
             <v-select v-model="newTask.workMode" :items="workModeOptions" item-title="title" item-value="value" label="Bearbeitung" density="compact" />
             <v-select v-model="newTask.gradingMode" :items="gradingModeOptions" item-title="title" item-value="value" label="Bewertungsmodus" density="compact" />
             <v-text-field v-model.number="newTask.maxPoints" label="Max. Punkte" type="number" density="compact" :disabled="!requiresPoints(newTask.gradingMode)" />
             <v-text-field v-model.number="newTask.passThreshold" label="Bestehensgrenze %" type="number" density="compact" :disabled="!requiresPoints(newTask.gradingMode)" />
+          </div>
+          <div v-if="newTask.unlockMode === TaskUnlockMode.AUTOMATIC && newTask.dependencyTaskIds.length > 0" class="dependency-condition-list">
+            <div v-for="dependencyId in newTask.dependencyTaskIds" :key="`new-${dependencyId}`" class="dependency-condition-row">
+              <span>{{ getDependencyTaskLabel(dependencyId) }}</span>
+              <v-select :model-value="newTask.dependencyConditions[dependencyId] ?? TaskDependencyCondition.PASSED" :items="dependencyConditionOptions" item-title="title" item-value="value" label="Bedingung" density="compact" hide-details @update:model-value="setNewTaskDependencyCondition(dependencyId, $event)" />
+            </div>
           </div>
           <div class="task-form__toggles">
             <v-switch v-model="newTask.feedbackRequired" label="Feedback erforderlich" color="primary" hide-details />
@@ -65,6 +73,7 @@
                   <strong>{{ task.order }}. {{ task.title || 'Unbenannte Aufgabe' }}</strong>
                   <div class="teacher-task-card__chips">
                     <v-chip size="small" variant="tonal" label>{{ formatUnlockMode(task.unlockMode) }}</v-chip>
+                    <v-chip size="small" variant="tonal" label>{{ formatTaskLearningPathType(task.learningPathType) }}</v-chip>
                     <v-chip size="small" variant="tonal" label>{{ formatTaskWorkMode(task.workMode) }}</v-chip>
                     <v-chip size="small" variant="tonal" label>{{ formatGradingMode(task.gradingMode) }}</v-chip>
                     <v-chip size="small" :color="task.isPublished ? 'primary' : undefined" variant="tonal" label>
@@ -96,13 +105,21 @@
                 <span class="teacher-task-card__group-title">Freischaltung</span>
                 <div class="teacher-task-card__release">
                   <v-select v-model="task.unlockMode" :items="unlockModeOptions" item-title="title" item-value="value" label="Modus" density="compact" hide-details :disabled="!canEdit" />
-                  <v-select v-model="task.prerequisiteTaskId" :items="getPrerequisiteOptions(task)" item-title="title" item-value="id" label="Voraussetzung" density="compact" hide-details clearable :disabled="!canEdit || task.unlockMode === TaskUnlockMode.IMMEDIATE" />
+                  <v-select v-model="task.dependencyOperator" :items="dependencyOperatorOptions" item-title="title" item-value="value" label="Regel" density="compact" hide-details :disabled="!canEdit || task.unlockMode !== TaskUnlockMode.AUTOMATIC" />
+                  <v-select :model-value="getTaskDependencyIds(task)" :items="getPrerequisiteOptions(task)" item-title="title" item-value="id" label="Voraussetzungen" density="compact" hide-details multiple chips closable-chips :disabled="!canEdit || task.unlockMode !== TaskUnlockMode.AUTOMATIC" @update:model-value="setTaskDependencyIds(task, $event)" />
+                </div>
+                <div v-if="task.unlockMode === TaskUnlockMode.AUTOMATIC && (task.dependencies?.length ?? 0) > 0" class="dependency-condition-list">
+                  <div v-for="dependency in task.dependencies" :key="`${task.id}-${dependency.prerequisiteTaskId}`" class="dependency-condition-row">
+                    <span>{{ getDependencyTaskLabel(dependency.prerequisiteTaskId) }}</span>
+                    <v-select v-model="dependency.condition" :items="dependencyConditionOptions" item-title="title" item-value="value" label="Bedingung" density="compact" hide-details :disabled="!canEdit" />
+                  </div>
                 </div>
               </section>
 
               <section class="teacher-task-card__group">
                 <span class="teacher-task-card__group-title">Bewertung</span>
                 <div class="teacher-task-card__assessment">
+                  <v-select v-model="task.learningPathType" :items="learningPathTypeOptions" item-title="title" item-value="value" label="Pfad" density="compact" hide-details :disabled="!canEdit" />
                   <v-select v-model="task.workMode" :items="workModeOptions" item-title="title" item-value="value" label="Bearbeitung" density="compact" hide-details :disabled="!canEdit" />
                   <v-select v-model="task.gradingMode" :items="gradingModeOptions" item-title="title" item-value="value" label="Modus" density="compact" hide-details :disabled="!canEdit" />
                   <v-text-field v-model.number="task.maxPoints" label="Punkte" type="number" density="compact" hide-details :disabled="!canEdit || !requiresPoints(task.gradingMode)" />
@@ -196,6 +213,7 @@
             <p>{{ task.description }}</p>
             <div class="student-task__assessment">
               <span>{{ formatTaskWorkMode(task.workMode) }}<template v-if="task.workMode === TaskWorkMode.GROUP && task.group?.name"> · {{ task.group.name }}</template></span>
+              <span>{{ formatTaskLearningPathType(task.learningPathType) }}</span>
               <span>Bewertung: {{ formatGradingMode(task.gradingMode) }}</span>
               <span>{{ formatAssessmentStatus(task.assessment?.status) }}</span>
               <span v-if="task.assessment?.points !== undefined && task.assessment?.points !== null">
@@ -259,7 +277,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import learningTaskService, { TaskGradingMode, TaskProgressStatus, TaskUnlockMode, TaskWorkMode, formatAssessmentStatus, formatGradingMode, formatTaskWorkMode, formatUnlockMode, type LearningPath, type LearningTask, type LearningTaskProgress, type StudentLearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
+import learningTaskService, { TaskDependencyCondition, TaskDependencyOperator, TaskGradingMode, TaskLearningPathType, TaskProgressStatus, TaskUnlockMode, TaskWorkMode, formatAssessmentStatus, formatGradingMode, formatTaskLearningPathType, formatTaskWorkMode, formatUnlockMode, type LearningPath, type LearningTask, type LearningTaskProgress, type StudentLearningTask, type StudentProgressOverview } from '@/services/learningTask.service'
 import { getApiErrorMessage } from '@/services/apiErrors'
 import { getTaskStatusPresentation } from '@/services/statusPresentation'
 
@@ -290,7 +308,11 @@ const newTask = reactive({
   passThreshold: 50,
   feedbackRequired: false,
   allowRetries: true,
-  prerequisiteTaskId: null as string | null
+  prerequisiteTaskId: null as string | null,
+  dependencyOperator: TaskDependencyOperator.ALL_OF,
+  dependencyTaskIds: [] as string[],
+  dependencyConditions: {} as Record<string, TaskDependencyCondition>,
+  learningPathType: TaskLearningPathType.STANDARD
 })
 
 const confirmation = reactive<{
@@ -309,6 +331,22 @@ const unlockModeOptions = [
   { title: 'Sofort verfügbar', value: TaskUnlockMode.IMMEDIATE },
   { title: 'Nach Voraussetzung', value: TaskUnlockMode.AUTOMATIC },
   { title: 'Manuell freischalten', value: TaskUnlockMode.MANUAL }
+]
+const dependencyOperatorOptions = [
+  { title: 'Alle Voraussetzungen', value: TaskDependencyOperator.ALL_OF },
+  { title: 'Eine Voraussetzung reicht', value: TaskDependencyOperator.ANY_OF }
+]
+const dependencyConditionOptions = [
+  { title: 'bestanden', value: TaskDependencyCondition.PASSED },
+  { title: 'nicht bestanden', value: TaskDependencyCondition.FAILED },
+  { title: 'abgegeben', value: TaskDependencyCondition.SUBMITTED },
+  { title: 'abgeschlossen', value: TaskDependencyCondition.COMPLETED }
+]
+const learningPathTypeOptions = [
+  { title: 'Standard', value: TaskLearningPathType.STANDARD },
+  { title: 'Wiederholung', value: TaskLearningPathType.REMEDIAL },
+  { title: 'Vertiefung', value: TaskLearningPathType.DEEPENING },
+  { title: 'Praxis', value: TaskLearningPathType.PRACTICE }
 ]
 const gradingModeOptions = [
   { title: 'Keine Bewertung', value: TaskGradingMode.NOT_GRADED },
@@ -360,13 +398,72 @@ const createPrerequisiteOptions = computed(() =>
     title: `${task.order}. ${task.title}`
   }))
 )
+
+const normalizeTaskForEditing = (task: LearningTask): LearningTask => {
+  const dependencies = task.dependencies?.length
+    ? task.dependencies
+    : task.prerequisiteTaskId
+      ? [{
+        prerequisiteTaskId: task.prerequisiteTaskId,
+        condition: TaskDependencyCondition.PASSED,
+        operator: task.dependencyOperator ?? TaskDependencyOperator.ALL_OF
+      }]
+      : []
+
+  return {
+    ...task,
+    dependencyOperator: task.dependencyOperator ?? dependencies[0]?.operator ?? TaskDependencyOperator.ALL_OF,
+    dependencies,
+    learningPathType: task.learningPathType ?? TaskLearningPathType.STANDARD
+  }
+}
+
+const getDependencyTaskLabel = (taskId: string) => {
+  const task = getTaskById(taskId)
+
+  return task ? `${task.order}. ${task.title}` : 'Unbekannte Aufgabe'
+}
+
+const setNewTaskDependencyIds = (value: unknown) => {
+  const selectedIds = Array.isArray(value)
+    ? value.map((entry) => String(entry)).filter(Boolean)
+    : []
+  const nextConditions: Record<string, TaskDependencyCondition> = {}
+
+  for (const dependencyId of selectedIds) {
+    nextConditions[dependencyId] =
+      newTask.dependencyConditions[dependencyId] ?? TaskDependencyCondition.PASSED
+  }
+
+  newTask.dependencyTaskIds = selectedIds
+  newTask.dependencyConditions = nextConditions
+}
+
+const setNewTaskDependencyCondition = (dependencyId: string, value: unknown) => {
+  newTask.dependencyConditions[dependencyId] = Object.values(TaskDependencyCondition).includes(value as TaskDependencyCondition)
+    ? value as TaskDependencyCondition
+    : TaskDependencyCondition.PASSED
+}
+
+const getNewTaskDependencyPayload = () =>
+  newTask.dependencyTaskIds.map((prerequisiteTaskId) => ({
+    prerequisiteTaskId,
+    condition: newTask.dependencyConditions[prerequisiteTaskId] ?? TaskDependencyCondition.PASSED
+  }))
+
+const getTaskDependencyPayload = (task: LearningTask) =>
+  (task.dependencies ?? []).map((dependency) => ({
+    prerequisiteTaskId: dependency.prerequisiteTaskId,
+    condition: dependency.condition ?? TaskDependencyCondition.PASSED
+  }))
+
 const newTaskValidationMessage = computed(() => {
   if (newTask.title.trim().length === 0) {
     return 'Ein Titel ist erforderlich.'
   }
 
-  if (newTask.unlockMode === TaskUnlockMode.AUTOMATIC && !newTask.prerequisiteTaskId) {
-    return 'Automatische Freischaltung benötigt eine Voraussetzung.'
+  if (newTask.unlockMode === TaskUnlockMode.AUTOMATIC && newTask.dependencyTaskIds.length === 0) {
+    return 'Automatische Freischaltung benötigt mindestens eine Voraussetzung.'
   }
 
   if (requiresPoints(newTask.gradingMode) && (!newTask.maxPoints || newTask.maxPoints <= 0)) {
@@ -416,7 +513,7 @@ const loadTeacherData = () =>
     tasks.value = []
     progressOverview.value = []
     const [loadedTasks, loadedOverview] = await Promise.all([learningTaskService.listTasks(props.courseId, effectiveCourseRunId.value, effectiveCourseVersionId.value), learningTaskService.getProgressOverview(props.courseId, effectiveCourseRunId.value)])
-    tasks.value = loadedTasks
+    tasks.value = loadedTasks.map(normalizeTaskForEditing)
     progressOverview.value = loadedOverview
   })
 
@@ -432,6 +529,10 @@ const resetNewTask = () => {
   newTask.feedbackRequired = false
   newTask.allowRetries = true
   newTask.prerequisiteTaskId = null
+  newTask.dependencyOperator = TaskDependencyOperator.ALL_OF
+  newTask.dependencyTaskIds = []
+  newTask.dependencyConditions = {}
+  newTask.learningPathType = TaskLearningPathType.STANDARD
   showCreateForm.value = false
 }
 
@@ -456,7 +557,10 @@ const submitNewTask = async () => {
       order: newTask.order,
       type: 'DEMO_TASK',
       unlockMode: newTask.unlockMode,
-      prerequisiteTaskId: newTask.unlockMode === TaskUnlockMode.IMMEDIATE ? null : newTask.prerequisiteTaskId,
+      prerequisiteTaskId: newTask.unlockMode === TaskUnlockMode.IMMEDIATE ? null : (newTask.dependencyTaskIds[0] ?? null),
+      dependencyOperator: newTask.dependencyOperator,
+      dependencies: newTask.unlockMode === TaskUnlockMode.AUTOMATIC ? getNewTaskDependencyPayload() : [],
+      learningPathType: newTask.learningPathType,
       workMode: newTask.workMode,
       gradingMode: newTask.gradingMode,
       maxPoints: requiresPoints(newTask.gradingMode) ? newTask.maxPoints : null,
@@ -483,11 +587,48 @@ const getPrerequisiteOptions = (task: LearningTask) =>
 
 const getTaskById = (taskId?: string) => tasks.value.find((task) => task.id === taskId)
 
+const getTaskDependencyIds = (task: LearningTask): string[] => {
+  const ids = (task.dependencies ?? [])
+    .map((dependency) => dependency.prerequisiteTaskId)
+    .filter(Boolean)
+
+  if (ids.length === 0 && task.prerequisiteTaskId) {
+    ids.push(task.prerequisiteTaskId)
+  }
+
+  return [...new Set(ids)]
+}
+
+const setTaskDependencyIds = (task: LearningTask, value: unknown) => {
+  const selectedIds = Array.isArray(value)
+    ? value.map((entry) => String(entry)).filter(Boolean)
+    : []
+  const existingDependenciesByTaskId = new Map(
+    (task.dependencies ?? []).map((dependency) => [
+      dependency.prerequisiteTaskId,
+      dependency
+    ])
+  )
+
+  task.dependencies = selectedIds.map((prerequisiteTaskId) => ({
+    prerequisiteTaskId,
+    condition: existingDependenciesByTaskId.get(prerequisiteTaskId)?.condition ?? TaskDependencyCondition.PASSED,
+    operator: task.dependencyOperator ?? TaskDependencyOperator.ALL_OF
+  }))
+  task.prerequisiteTaskId = selectedIds[0] ?? undefined
+}
+
 const wouldCreateCycle = (taskId: string, prerequisiteTaskId?: string | null): boolean => {
-  let currentTaskId = prerequisiteTaskId ?? undefined
+  const stack = prerequisiteTaskId ? [prerequisiteTaskId] : []
   const visitedTaskIds = new Set<string>()
 
-  while (currentTaskId) {
+  while (stack.length > 0) {
+    const currentTaskId = stack.pop()
+
+    if (!currentTaskId) {
+      continue
+    }
+
     if (currentTaskId === taskId) {
       return true
     }
@@ -497,7 +638,7 @@ const wouldCreateCycle = (taskId: string, prerequisiteTaskId?: string | null): b
     }
 
     visitedTaskIds.add(currentTaskId)
-    currentTaskId = getTaskById(currentTaskId)?.prerequisiteTaskId
+    stack.push(...getTaskDependencyIds(getTaskById(currentTaskId) ?? ({} as LearningTask)))
   }
 
   return false
@@ -508,23 +649,25 @@ const getTaskValidationMessage = (task: LearningTask): string => {
     return 'Ein Titel ist erforderlich.'
   }
 
-  if (task.unlockMode === TaskUnlockMode.IMMEDIATE && task.prerequisiteTaskId) {
+  const dependencyIds = getTaskDependencyIds(task)
+
+  if (task.unlockMode === TaskUnlockMode.IMMEDIATE && dependencyIds.length > 0) {
     return 'Sofort verfügbare Aufgaben dürfen keine Voraussetzung haben.'
   }
 
-  if (task.unlockMode === TaskUnlockMode.AUTOMATIC && !task.prerequisiteTaskId) {
-    return 'Automatische Freischaltung benötigt eine Voraussetzung.'
+  if (task.unlockMode === TaskUnlockMode.AUTOMATIC && dependencyIds.length === 0) {
+    return 'Automatische Freischaltung benötigt mindestens eine Voraussetzung.'
   }
 
   if (requiresPoints(task.gradingMode) && (!task.maxPoints || task.maxPoints <= 0)) {
     return 'Bewertete Aufgaben benötigen eine maximale Punktzahl.'
   }
 
-  if (task.prerequisiteTaskId === task.id) {
+  if (dependencyIds.includes(task.id)) {
     return 'Eine Aufgabe darf nicht von sich selbst abhängen.'
   }
 
-  if (wouldCreateCycle(task.id, task.prerequisiteTaskId)) {
+  if (dependencyIds.some((dependencyId) => wouldCreateCycle(task.id, dependencyId))) {
     return 'Diese Voraussetzung würde einen Zyklus erzeugen.'
   }
 
@@ -551,7 +694,10 @@ const saveTask = async (task: LearningTask) => {
       order: task.order,
       type: task.type,
       unlockMode: task.unlockMode,
-      prerequisiteTaskId: task.unlockMode === TaskUnlockMode.IMMEDIATE ? null : (task.prerequisiteTaskId ?? null),
+      prerequisiteTaskId: task.unlockMode === TaskUnlockMode.IMMEDIATE ? null : (getTaskDependencyIds(task)[0] ?? null),
+      dependencyOperator: task.dependencyOperator ?? TaskDependencyOperator.ALL_OF,
+      dependencies: task.unlockMode === TaskUnlockMode.AUTOMATIC ? getTaskDependencyPayload(task) : [],
+      learningPathType: task.learningPathType ?? TaskLearningPathType.STANDARD,
       workMode: task.workMode,
       gradingMode: task.gradingMode,
       maxPoints: requiresPoints(task.gradingMode) ? task.maxPoints ?? null : null,
@@ -901,7 +1047,7 @@ const formatDate = (value: string) =>
 }
 
 .task-form__grid {
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1.2fr) minmax(180px, 1fr) 130px 150px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .task-form__toggles {
@@ -909,6 +1055,28 @@ const formatDate = (value: string) =>
   display: flex;
   flex-wrap: wrap;
   gap: 8px 20px;
+}
+
+.dependency-condition-list {
+  display: grid;
+  gap: 8px;
+}
+
+.dependency-condition-row {
+  align-items: center;
+  background: rgba(var(--v-theme-surface-variant), 0.28);
+  border: 1px solid rgba(var(--v-theme-outline), 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 240px);
+  padding: 8px 10px;
+
+  span {
+    font-size: 0.9rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
 }
 
 .teacher-task-card {
@@ -990,7 +1158,7 @@ const formatDate = (value: string) =>
 .teacher-task-card__release {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(140px, 0.9fr) minmax(160px, 1.1fr);
+  grid-template-columns: minmax(140px, 0.8fr) minmax(160px, 0.9fr) minmax(210px, 1.3fr);
 }
 
 .teacher-task-card__assessment {
@@ -1100,6 +1268,7 @@ const formatDate = (value: string) =>
   .teacher-task-card__body,
   .teacher-task-card__release,
   .teacher-task-card__assessment,
+  .dependency-condition-row,
   .teacher-progress-task {
     grid-template-columns: 1fr;
   }

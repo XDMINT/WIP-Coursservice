@@ -14,6 +14,7 @@ import { GroupMembership } from '../entities/group-membership.entity';
 import { GroupTaskProgress } from '../entities/group-task-progress.entity';
 import { LearningMaterial } from '../entities/learning-material.entity';
 import { TaskAssessment } from '../entities/task-assessment.entity';
+import { TaskDependency } from '../entities/task-dependency.entity';
 import { TaskProgress } from '../entities/task-progress.entity';
 import { Task } from '../entities/task.entity';
 import {
@@ -32,6 +33,7 @@ export type CourseRepositoriesDependencies = {
   courseResults: Repository<CourseResult>;
   enrollments: Repository<Enrollment>;
   tasks: Repository<Task>;
+  taskDependencies: Repository<TaskDependency>;
   taskAssessments: Repository<TaskAssessment>;
   taskProgress: Repository<TaskProgress>;
   contentReleases: Repository<ContentRelease>;
@@ -52,6 +54,7 @@ export class CourseRepositories {
   readonly courseResults: EntityRepositoryPort<CourseResult>;
   readonly enrollments: EntityRepositoryPort<Enrollment>;
   readonly tasks: EntityRepositoryPort<Task>;
+  readonly taskDependencies: EntityRepositoryPort<TaskDependency>;
   readonly taskAssessments: EntityRepositoryPort<TaskAssessment>;
   readonly taskProgress: EntityRepositoryPort<TaskProgress>;
   readonly contentReleases: EntityRepositoryPort<ContentRelease>;
@@ -71,6 +74,7 @@ export class CourseRepositories {
     this.courseResults = new TypeOrmEntityRepositoryAdapter(dependencies.courseResults);
     this.enrollments = new TypeOrmEntityRepositoryAdapter(dependencies.enrollments);
     this.tasks = new TypeOrmEntityRepositoryAdapter(dependencies.tasks);
+    this.taskDependencies = new TypeOrmEntityRepositoryAdapter(dependencies.taskDependencies);
     this.taskAssessments = new TypeOrmEntityRepositoryAdapter(dependencies.taskAssessments);
     this.taskProgress = new TypeOrmEntityRepositoryAdapter(dependencies.taskProgress);
     this.contentReleases = new TypeOrmEntityRepositoryAdapter(dependencies.contentReleases);
